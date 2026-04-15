@@ -64,7 +64,7 @@ def build_gui():
 
             # ── RIGHT PANEL ───────────────────────────────────────────
             with dpg.child_window(tag="right_panel", border=False,
-                                  auto_resize_x=True, auto_resize_y=True):
+                                  auto_resize_y=True):
                 dpg.add_text("Press [Preview] to render", tag="status_text")
                 dpg.add_image(texture_tag="preview_tex", tag="preview_img",
                               show=False)
