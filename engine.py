@@ -164,6 +164,9 @@ def run_chaos_game_partial(
     Pass state=None on the first call to trigger burn-in.
     Returns (counts, colors, state) where state=(x, y, color_coord).
     """
+    if symmetry < 1:
+        raise ValueError(f"symmetry must be >= 1, got {symmetry}")
+
     scale = min(width, height) * 0.35 * zoom
     rot_rad = math.radians(rotation)
     cos_r = math.cos(rot_rad)
