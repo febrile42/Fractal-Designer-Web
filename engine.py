@@ -249,12 +249,55 @@ def tone_map(
     return np.clip(alpha ** (1.0 / gamma) * brightness, 0.0, 1.0)
 
 
+def _make_image(
+    counts: np.ndarray,
+    colors: np.ndarray,
+    config: dict,
+    w: int,
+    h: int,
+    ss: int,
+) -> Image.Image:
+    """Tone-map and colorize accumulated arrays into a PIL Image."""
+    luminance = tone_map(counts, config["gamma"], config["brightness"])
+
+    palette_name = config.get("palette", "fire")
+    stops = palette_name if isinstance(palette_name, list) else get_palette(palette_name)
+
+    vibrancy = float(np.clip(config.get("vibrancy", 1.0), 0.0, 1.0))
+    bg = config.get("background", [0, 0, 0])
+
+    stops_arr = np.array(stops, dtype=np.float64)          # (N, 3)
+    n = len(stops) - 1
+    t_clamped = np.clip(colors, 0.0, 1.0)
+    scaled = t_clamped * n
+    lo = np.floor(scaled).astype(np.int32)
+    hi = np.minimum(lo + 1, n)
+    frac = (scaled - lo)[..., np.newaxis]
+    palette_rgb = stops_arr[lo] + (stops_arr[hi] - stops_arr[lo]) * frac
+
+    lum3 = luminance[:, :, np.newaxis]
+    flat_pixels = palette_rgb * lum3
+
+    safe_vib = max(vibrancy, 0.01)
+    vib_pixels = palette_rgb * (lum3 ** (1.0 / safe_vib))
+
+    blended = flat_pixels * (1 - vibrancy) + vib_pixels * vibrancy
+    blended = np.round(np.clip(blended, 0, 255)).astype(np.uint8)
+
+    mask = luminance < 1e-6
+    blended[mask] = bg
+
+    img = Image.fromarray(blended, "RGB")
+    if ss > 1:
+        img = img.resize((config["width"], config["height"]), Image.LANCZOS)
+    return img
+
+
 def render(config: dict) -> Image.Image:
     ss = config.get("supersample", 1)
     w = config["width"] * ss
     h = config["height"] * ss
-    quality = config["quality"]
-    iterations = quality * w * h
+    iterations = config["quality"] * w * h
 
     transforms = build_transforms(
         num=config["num_transforms"],
@@ -264,8 +307,7 @@ def render(config: dict) -> Image.Image:
 
     counts, color_coords = run_chaos_game(
         transforms=transforms,
-        width=w,
-        height=h,
+        width=w, height=h,
         iterations=iterations,
         symmetry=config["symmetry"],
         zoom=config["zoom"],
@@ -273,43 +315,4 @@ def render(config: dict) -> Image.Image:
         center=tuple(config["center"]),
     )
 
-    luminance = tone_map(counts, config["gamma"], config["brightness"])
-
-    palette_name = config.get("palette", "fire")
-    if isinstance(palette_name, list):
-        stops = palette_name
-    else:
-        stops = get_palette(palette_name)
-
-    vibrancy = float(np.clip(config.get("vibrancy", 1.0), 0.0, 1.0))
-    bg = config.get("background", [0, 0, 0])
-
-    # Vectorized palette sampling
-    stops_arr = np.array(stops, dtype=np.float64)          # (N, 3)
-    n = len(stops) - 1
-    t_clamped = np.clip(color_coords, 0.0, 1.0)
-    scaled = t_clamped * n
-    lo = np.floor(scaled).astype(np.int32)
-    hi = np.minimum(lo + 1, n)
-    frac = (scaled - lo)[..., np.newaxis]                  # (h, w, 1) for broadcasting
-    palette_rgb = stops_arr[lo] + (stops_arr[hi] - stops_arr[lo]) * frac
-
-    lum3 = luminance[:, :, np.newaxis]                          # (h, w, 1)
-    flat_pixels = palette_rgb * lum3                            # luminance-scaled
-
-    safe_vib = max(vibrancy, 0.01)
-    vib_pixels = palette_rgb * (lum3 ** (1.0 / safe_vib))      # vibrancy-scaled
-
-    blended = flat_pixels * (1 - vibrancy) + vib_pixels * vibrancy
-    blended = np.round(np.clip(blended, 0, 255)).astype(np.uint8)
-
-    # Apply background where luminance is near zero
-    mask = luminance < 1e-6
-    blended[mask] = bg
-
-    pixels = blended
-
-    img = Image.fromarray(pixels, "RGB")
-    if ss > 1:
-        img = img.resize((config["width"], config["height"]), Image.LANCZOS)
-    return img
+    return _make_image(counts, color_coords, config, w, h, ss)

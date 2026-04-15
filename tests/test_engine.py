@@ -56,7 +56,7 @@ def test_chaos_game_has_nonzero_hits():
     )
     assert counts.max() > 0
 
-from engine import tone_map, render, run_chaos_game_partial
+from engine import tone_map, render, run_chaos_game_partial, _make_image
 import numpy as np
 from PIL import Image
 
@@ -147,3 +147,31 @@ def test_render_returns_pil_image():
     assert isinstance(img, Image.Image)
     assert img.size == (64, 64)
     assert img.mode == "RGB"
+
+
+_SMALL_CONFIG = {
+    "width": 32, "height": 32,
+    "quality": 5, "supersample": 1,
+    "symmetry": 1, "num_transforms": 3,
+    "variations": ["linear"], "seed": 1,
+    "zoom": 1.0, "rotation": 0.0, "center": [0.0, 0.0],
+    "palette": "fire", "background": [0, 0, 0],
+    "gamma": 2.5, "brightness": 3.0, "vibrancy": 1.0,
+}
+
+
+def test_make_image_returns_pil_image():
+    counts = np.ones((32, 32), dtype=np.float64) * 100
+    colors = np.full((32, 32), 0.5, dtype=np.float64)
+    img = _make_image(counts, colors, _SMALL_CONFIG, w=32, h=32, ss=1)
+    assert isinstance(img, Image.Image)
+    assert img.size == (32, 32)
+    assert img.mode == "RGB"
+
+
+def test_make_image_supersample_downscales():
+    counts = np.ones((64, 64), dtype=np.float64) * 100
+    colors = np.full((64, 64), 0.5, dtype=np.float64)
+    cfg = {**_SMALL_CONFIG, "width": 32, "height": 32}
+    img = _make_image(counts, colors, cfg, w=64, h=64, ss=2)
+    assert img.size == (32, 32)
