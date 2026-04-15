@@ -253,8 +253,6 @@ def _make_image(
     counts: np.ndarray,
     colors: np.ndarray,
     config: dict,
-    w: int,
-    h: int,
     ss: int,
 ) -> Image.Image:
     """Tone-map and colorize accumulated arrays into a PIL Image."""
@@ -315,4 +313,4 @@ def render(config: dict) -> Image.Image:
         center=tuple(config["center"]),
     )
 
-    return _make_image(counts, color_coords, config, w, h, ss)
+    return _make_image(counts, color_coords, config, ss)

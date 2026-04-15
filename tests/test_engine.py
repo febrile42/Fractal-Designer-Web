@@ -163,7 +163,7 @@ _SMALL_CONFIG = {
 def test_make_image_returns_pil_image():
     counts = np.ones((32, 32), dtype=np.float64) * 100
     colors = np.full((32, 32), 0.5, dtype=np.float64)
-    img = _make_image(counts, colors, _SMALL_CONFIG, w=32, h=32, ss=1)
+    img = _make_image(counts, colors, _SMALL_CONFIG, ss=1)
     assert isinstance(img, Image.Image)
     assert img.size == (32, 32)
     assert img.mode == "RGB"
@@ -173,5 +173,5 @@ def test_make_image_supersample_downscales():
     counts = np.ones((64, 64), dtype=np.float64) * 100
     colors = np.full((64, 64), 0.5, dtype=np.float64)
     cfg = {**_SMALL_CONFIG, "width": 32, "height": 32}
-    img = _make_image(counts, colors, cfg, w=64, h=64, ss=2)
+    img = _make_image(counts, colors, cfg, ss=2)
     assert img.size == (32, 32)
