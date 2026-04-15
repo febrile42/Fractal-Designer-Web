@@ -3,7 +3,7 @@ import random
 import numpy as np
 from dataclasses import dataclass, field
 from variations import VARIATION_REGISTRY
-from palettes import get_palette, sample_palette
+from palettes import get_palette
 from PIL import Image
 
 _CHAOS_BURN_IN = 20
@@ -198,10 +198,15 @@ def render(config: dict) -> Image.Image:
     vibrancy = float(np.clip(config.get("vibrancy", 1.0), 0.0, 1.0))
     bg = config.get("background", [0, 0, 0])
 
-    # Vectorized pixel building
-    flat_coords = color_coords.ravel()
-    palette_rgb = np.array([sample_palette(stops, float(t)) for t in flat_coords],
-                           dtype=np.float64).reshape(h, w, 3)
+    # Vectorized palette sampling
+    stops_arr = np.array(stops, dtype=np.float64)          # (N, 3)
+    n = len(stops) - 1
+    t_clamped = np.clip(color_coords, 0.0, 1.0)
+    scaled = t_clamped * n
+    lo = np.floor(scaled).astype(np.int32)
+    hi = np.minimum(lo + 1, n)
+    frac = (scaled - lo)[..., np.newaxis]                  # (h, w, 1) for broadcasting
+    palette_rgb = stops_arr[lo] + (stops_arr[hi] - stops_arr[lo]) * frac
 
     lum3 = luminance[:, :, np.newaxis]                          # (h, w, 1)
     flat_pixels = palette_rgb * lum3                            # luminance-scaled
