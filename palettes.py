@@ -65,7 +65,7 @@ def sample_palette(stops: list[tuple[int, int, int]], t: float) -> tuple[int, in
     r0, g0, b0 = stops[lo]
     r1, g1, b1 = stops[hi]
     return (
-        int(r0 + (r1 - r0) * frac),
-        int(g0 + (g1 - g0) * frac),
-        int(b0 + (b1 - b0) * frac),
+        round(r0 + (r1 - r0) * frac),
+        round(g0 + (g1 - g0) * frac),
+        round(b0 + (b1 - b0) * frac),
     )
