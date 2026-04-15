@@ -32,8 +32,14 @@ def test_horseshoe_origin():
     assert x == 0.0 and y == 0.0
 
 def test_polar():
-    # polar(1, 0): theta=0, r=1 → (0/pi, 1-1) = (0, 0)
+    # polar(1, 0) with atan2(x,y): theta=atan2(1,0)=pi/2; r=1 → (0.5, 0.0)
     x, y = polar(1.0, 0.0)
+    assert abs(x - 0.5) < 1e-9
+    assert abs(y - 0.0) < 1e-9
+
+def test_polar_on_y_axis():
+    # polar(0, 1) with atan2(x,y): theta=atan2(0,1)=0; r=1 → (0.0, 0.0)
+    x, y = polar(0.0, 1.0)
     assert abs(x - 0.0) < 1e-9
     assert abs(y - 0.0) < 1e-9
 

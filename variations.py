@@ -30,7 +30,7 @@ def horseshoe(x: float, y: float) -> tuple[float, float]:
 
 def polar(x: float, y: float) -> tuple[float, float]:
     r = math.sqrt(x * x + y * y)
-    theta = math.atan2(y, x)
+    theta = math.atan2(x, y)
     return theta / math.pi, r - 1.0
 
 def curl(x: float, y: float, c1: float = 0.5, c2: float = 0.1) -> tuple[float, float]:
