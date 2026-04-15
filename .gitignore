@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.png
+*.jpg
+*.jpeg
+*.egg-info/
+dist/
+build/
+.DS_Store
