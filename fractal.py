@@ -1,4 +1,9 @@
 import dearpygui.dearpygui as dpg
+import threading
+import time
+import numpy as np
+from engine import render as flame_render
+from PIL import Image
 
 # ── Default config ────────────────────────────────────────────────────────────
 CONFIG = {
@@ -169,12 +174,97 @@ def _build_buttons():
                        callback=_on_render, width=150, height=36)
 
 
+def collect_config() -> dict:
+    active_vars = [name for name in VARIATION_NAMES
+                   if dpg.get_value(f"var_{name}")]
+    if not active_vars:
+        active_vars = ["linear"]
+    return {
+        "width":          dpg.get_value("cfg_width"),
+        "height":         dpg.get_value("cfg_height"),
+        "output":         dpg.get_value("cfg_output"),
+        "quality":        dpg.get_value("cfg_quality"),
+        "supersample":    2 if dpg.get_value("cfg_supersample") else 1,
+        "symmetry":       dpg.get_value("cfg_symmetry"),
+        "num_transforms": dpg.get_value("cfg_num_transforms"),
+        "variations":     active_vars,
+        "seed":           dpg.get_value("cfg_seed"),
+        "zoom":           dpg.get_value("cfg_zoom"),
+        "rotation":       dpg.get_value("cfg_rotation"),
+        "center":         [dpg.get_value("cfg_center_x"),
+                           dpg.get_value("cfg_center_y")],
+        "palette":        dpg.get_value("cfg_palette"),
+        "background":     [dpg.get_value("cfg_bg_r"),
+                           dpg.get_value("cfg_bg_g"),
+                           dpg.get_value("cfg_bg_b")],
+        "gamma":          dpg.get_value("cfg_gamma"),
+        "brightness":     dpg.get_value("cfg_brightness"),
+        "vibrancy":       dpg.get_value("cfg_vibrancy"),
+    }
+
+
+def _set_buttons_enabled(enabled: bool):
+    dpg.configure_item("btn_preview", enabled=enabled)
+    dpg.configure_item("btn_render", enabled=enabled)
+
+
+def _show_image(img: Image.Image):
+    """Convert PIL Image to DPG texture and display it."""
+    img_rgba = img.convert("RGBA")
+    w, h = img_rgba.size
+    data = np.array(img_rgba, dtype=np.float32) / 255.0
+    flat = data.ravel().tolist()
+
+    if dpg.does_item_exist("preview_tex"):
+        dpg.delete_item("preview_tex")
+
+    with dpg.texture_registry():
+        dpg.add_static_texture(width=w, height=h, default_value=flat,
+                               tag="preview_tex")
+
+    # Scale image to fit right panel (max width = panel width - 20px padding)
+    panel_w = dpg.get_item_width("right_panel")
+    max_w = max(panel_w - 20, 100)
+    scale = min(1.0, max_w / w)
+    disp_w, disp_h = int(w * scale), int(h * scale)
+
+    dpg.configure_item("preview_img", texture_tag="preview_tex",
+                       width=disp_w, height=disp_h, show=True)
+
+
+def _run_render(config: dict, save: bool):
+    _set_buttons_enabled(False)
+    dpg.set_value("status_text", "Rendering…")
+    t0 = time.perf_counter()
+    try:
+        img = flame_render(config)
+        elapsed = time.perf_counter() - t0
+        _show_image(img)
+        if save:
+            path = config["output"]
+            img.save(path)
+            dpg.set_value("status_text",
+                          f"Saved to {path}  ({elapsed:.1f}s)")
+        else:
+            dpg.set_value("status_text",
+                          f"Preview done  ({elapsed:.1f}s)  "
+                          f"{config['width']}×{config['height']}")
+    except Exception as e:
+        dpg.set_value("status_text", f"Error: {e}")
+    finally:
+        _set_buttons_enabled(True)
+
+
 def _on_preview():
-    pass  # wired in Task 8
+    cfg = collect_config()
+    cfg["quality"] = 15
+    cfg["supersample"] = 1
+    threading.Thread(target=_run_render, args=(cfg, False), daemon=True).start()
 
 
 def _on_render():
-    pass  # wired in Task 8
+    cfg = collect_config()
+    threading.Thread(target=_run_render, args=(cfg, True), daemon=True).start()
 
 
 if __name__ == "__main__":
