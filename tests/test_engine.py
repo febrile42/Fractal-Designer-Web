@@ -193,11 +193,13 @@ def test_render_stream_progress_increases():
     assert progresses[-1] <= 1.0
 
 def test_render_stream_final_frame_matches_render():
-    """Last frame of stream must be visually equivalent to render()."""
+    """Last frame of stream must have same dimensions as render() and contain data."""
     frames = list(render_stream(_SMALL_CONFIG))
-    last_img, _ = frames[-1]
+    last_img, progress = frames[-1]
     full_img = render(_SMALL_CONFIG)
     arr_stream = np.array(last_img)
     arr_full = np.array(full_img)
-    # Same size and mode
     assert arr_stream.shape == arr_full.shape
+    assert progress == 1.0
+    assert arr_stream.sum() > 0, "stream final frame is blank"
+    assert arr_full.sum() > 0, "render() output is blank"

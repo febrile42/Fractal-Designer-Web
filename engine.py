@@ -316,8 +316,11 @@ def render_stream(config: dict):
     state = None
     done = 0
 
-    for frac in _STREAM_FRACTIONS:
-        chunk = max(1, int(total * frac))
+    for i, frac in enumerate(_STREAM_FRACTIONS):
+        if i == len(_STREAM_FRACTIONS) - 1:
+            chunk = max(1, total - done)  # absorb any truncation remainder
+        else:
+            chunk = max(1, int(total * frac))
         counts, colors, state = run_chaos_game_partial(
             transforms=transforms,
             width=w, height=h,
