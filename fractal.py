@@ -2,7 +2,7 @@ import dearpygui.dearpygui as dpg
 import threading
 import time
 import numpy as np
-from engine import render as flame_render, render_stream
+from engine import render_stream
 from PIL import Image
 
 # ── Default config ────────────────────────────────────────────────────────────
@@ -211,20 +211,22 @@ def _set_buttons_enabled(enabled: bool):
     dpg.configure_item("btn_render", enabled=enabled)
 
 
-def _show_image(img: Image.Image):
-    """Convert PIL Image to DPG texture and display it."""
+def _prepare_texture(img: Image.Image) -> tuple[list, int, int]:
+    """Convert PIL Image to flat float RGBA list. Safe to call off the DPG mutex."""
     img_rgba = img.convert("RGBA")
     w, h = img_rgba.size
-    data = np.array(img_rgba, dtype=np.float32) / 255.0
-    flat = data.ravel().tolist()
+    flat = (np.array(img_rgba, dtype=np.float32) / 255.0).ravel().tolist()
+    return flat, w, h
 
+
+def _show_texture(flat: list, w: int, h: int) -> None:
+    """Upload pre-converted texture data to DPG. Must be called under dpg.mutex()."""
     if dpg.does_item_exist("preview_tex"):
         dpg.delete_item("preview_tex")
 
     dpg.add_static_texture(width=w, height=h, default_value=flat,
                            tag="preview_tex", parent="tex_registry")
 
-    # Scale image to fit right panel (max width = panel width - 20px padding)
     panel_w = dpg.get_item_width("right_panel")
     max_w = max(panel_w - 20, 100)
     scale = min(1.0, max_w / w)
@@ -245,8 +247,9 @@ def _run_render(config: dict, save: bool) -> None:
             if not dpg.is_dearpygui_running():
                 return
             pct = int(progress * 100)
+            flat, w, h = _prepare_texture(img)   # CPU work outside mutex
             with dpg.mutex():
-                _show_image(img)
+                _show_texture(flat, w, h)
                 dpg.set_value("status_text", f"Rendering… {pct}%")
 
         if img is None or not dpg.is_dearpygui_running():
