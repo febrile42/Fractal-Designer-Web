@@ -195,6 +195,7 @@ def run_chaos_game_partial(
         for _ in range(_CHAOS_BURN_IN):
             t = pick_transform()
             x, y = t.apply(x, y)
+            color_coord = (color_coord + t.color) * 0.5
             if not (math.isfinite(x) and math.isfinite(y)):
                 x, y = random.uniform(-1, 1), random.uniform(-1, 1)
                 color_coord = 0.0
