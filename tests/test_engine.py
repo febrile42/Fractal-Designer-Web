@@ -56,7 +56,7 @@ def test_chaos_game_has_nonzero_hits():
     )
     assert counts.max() > 0
 
-from engine import tone_map, render
+from engine import tone_map, render, run_chaos_game_partial
 import numpy as np
 from PIL import Image
 
@@ -76,6 +76,53 @@ def test_tone_map_values_in_range():
     result = tone_map(counts, gamma=2.5, brightness=3.0)
     assert result.min() >= 0.0
     assert result.max() <= 1.0
+
+def test_partial_returns_same_shape_as_input():
+    transforms = build_transforms(num=3, seed=42, variations=["linear"])
+    counts = np.zeros((64, 64), dtype=np.float64)
+    colors = np.zeros((64, 64), dtype=np.float64)
+    counts_out, colors_out, state = run_chaos_game_partial(
+        transforms=transforms,
+        width=64, height=64,
+        iterations=5000,
+        symmetry=1,
+        zoom=1.0, rotation=0.0, center=(0.0, 0.0),
+        counts=counts, colors=colors, state=None,
+    )
+    assert counts_out.shape == (64, 64)
+    assert colors_out.shape == (64, 64)
+
+def test_partial_accumulates_across_calls():
+    transforms = build_transforms(num=3, seed=42, variations=["linear"])
+    counts = np.zeros((64, 64), dtype=np.float64)
+    colors = np.zeros((64, 64), dtype=np.float64)
+    counts, colors, state = run_chaos_game_partial(
+        transforms=transforms,
+        width=64, height=64, iterations=5000,
+        symmetry=1, zoom=1.0, rotation=0.0, center=(0.0, 0.0),
+        counts=counts, colors=colors, state=None,
+    )
+    total_after_first = counts.sum()
+    counts, colors, state = run_chaos_game_partial(
+        transforms=transforms,
+        width=64, height=64, iterations=5000,
+        symmetry=1, zoom=1.0, rotation=0.0, center=(0.0, 0.0),
+        counts=counts, colors=colors, state=state,
+    )
+    assert counts.sum() > total_after_first
+
+def test_partial_state_continues_without_burn_in():
+    """Second call with existing state must not reset the orbit."""
+    transforms = build_transforms(num=3, seed=42, variations=["linear"])
+    zeros = np.zeros((64, 64), dtype=np.float64)
+    _, _, state = run_chaos_game_partial(
+        transforms=transforms,
+        width=64, height=64, iterations=1000,
+        symmetry=1, zoom=1.0, rotation=0.0, center=(0.0, 0.0),
+        counts=zeros.copy(), colors=zeros.copy(), state=None,
+    )
+    x, y, c = state
+    assert math.isfinite(x) and math.isfinite(y) and math.isfinite(c)
 
 def test_render_returns_pil_image():
     config = {

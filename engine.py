@@ -146,6 +146,88 @@ def run_chaos_game(
     return counts, colors
 
 
+def run_chaos_game_partial(
+    transforms: list[Transform],
+    width: int,
+    height: int,
+    iterations: int,
+    symmetry: int,
+    zoom: float,
+    rotation: float,
+    center: tuple[float, float],
+    counts: np.ndarray,
+    colors: np.ndarray,
+    state: tuple[float, float, float] | None,
+) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float]]:
+    """Run `iterations` chaos game steps, accumulating into existing arrays.
+
+    Pass state=None on the first call to trigger burn-in.
+    Returns (counts, colors, state) where state=(x, y, color_coord).
+    """
+    scale = min(width, height) * 0.35 * zoom
+    rot_rad = math.radians(rotation)
+    cos_r = math.cos(rot_rad)
+    sin_r = math.sin(rot_rad)
+    cx, cy = center
+
+    cum_weights: list[float] = []
+    running = 0.0
+    for t in transforms:
+        running += t.weight
+        cum_weights.append(running)
+
+    def pick_transform() -> Transform:
+        r = random.random()
+        for i, cw in enumerate(cum_weights):
+            if r <= cw:
+                return transforms[i]
+        return transforms[-1]
+
+    sym_angle = 2.0 * math.pi / symmetry
+    sym_table = [
+        (math.cos(s * sym_angle), math.sin(s * sym_angle))
+        for s in range(symmetry)
+    ]
+
+    if state is None:
+        x, y = random.uniform(-1, 1), random.uniform(-1, 1)
+        color_coord = 0.0
+        for _ in range(_CHAOS_BURN_IN):
+            t = pick_transform()
+            x, y = t.apply(x, y)
+            if not (math.isfinite(x) and math.isfinite(y)):
+                x, y = random.uniform(-1, 1), random.uniform(-1, 1)
+                color_coord = 0.0
+    else:
+        x, y, color_coord = state
+
+    for _ in range(iterations):
+        t = pick_transform()
+        x, y = t.apply(x, y)
+        color_coord = (color_coord + t.color) * 0.5
+
+        if not (math.isfinite(x) and math.isfinite(y)):
+            x, y = random.uniform(-1, 1), random.uniform(-1, 1)
+            color_coord = 0.0
+            continue
+
+        for cos_s, sin_s in sym_table:
+            rx = x * cos_s - y * sin_s
+            ry = x * sin_s + y * cos_s
+
+            wx = (rx - cx) * cos_r - (ry - cy) * sin_r
+            wy = (rx - cx) * sin_r + (ry - cy) * cos_r
+
+            px = int(wx * scale + width / 2)
+            py = int(wy * scale + height / 2)
+
+            if 0 <= px < width and 0 <= py < height:
+                counts[py, px] += 1
+                colors[py, px] = (colors[py, px] + color_coord) * 0.5
+
+    return counts, colors, (x, y, color_coord)
+
+
 def tone_map(
     counts: np.ndarray,
     gamma: float,
