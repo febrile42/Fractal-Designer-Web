@@ -215,7 +215,7 @@ def render(config: dict) -> Image.Image:
     vib_pixels = palette_rgb * (lum3 ** (1.0 / safe_vib))      # vibrancy-scaled
 
     blended = flat_pixels * (1 - vibrancy) + vib_pixels * vibrancy
-    blended = np.clip(blended, 0, 255).astype(np.uint8)
+    blended = np.round(np.clip(blended, 0, 255)).astype(np.uint8)
 
     # Apply background where luminance is near zero
     mask = luminance < 1e-6
