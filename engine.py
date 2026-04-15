@@ -151,6 +151,9 @@ def tone_map(
     gamma: float,
     brightness: float,
 ) -> np.ndarray:
+    if gamma <= 0:
+        raise ValueError(f"gamma must be > 0, got {gamma}")
+    counts = np.clip(counts, 0, None)   # guard against negative counts
     max_count = counts.max()
     if max_count == 0:
         return np.zeros_like(counts, dtype=np.float64)
@@ -192,7 +195,7 @@ def render(config: dict) -> Image.Image:
     else:
         stops = get_palette(palette_name)
 
-    vibrancy = config.get("vibrancy", 1.0)
+    vibrancy = float(np.clip(config.get("vibrancy", 1.0), 0.0, 1.0))
     bg = config.get("background", [0, 0, 0])
 
     # Vectorized pixel building
