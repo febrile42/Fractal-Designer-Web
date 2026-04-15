@@ -4,6 +4,8 @@ import numpy as np
 from dataclasses import dataclass, field
 from variations import VARIATION_REGISTRY
 
+_CHAOS_BURN_IN = 20
+
 @dataclass
 class Transform:
     a: float
@@ -15,6 +17,10 @@ class Transform:
     weight: float
     color: float                          # [0, 1] palette coordinate
     variations: dict[str, float]          # {variation_name: weight}
+    _var_total: float = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self._var_total = sum(self.variations.values()) or 1.0
 
     def apply(self, x: float, y: float) -> tuple[float, float]:
         # Affine step
@@ -22,7 +28,7 @@ class Transform:
         ny = self.d * x + self.e * y + self.f
         # Variation blending
         ox, oy = 0.0, 0.0
-        total = sum(self.variations.values())
+        total = self._var_total
         for name, w in self.variations.items():
             fn = VARIATION_REGISTRY[name]
             vx, vy = fn(nx, ny)
@@ -93,25 +99,34 @@ def run_chaos_game(
                 return transforms[i]
         return transforms[-1]
 
+    if symmetry < 1:
+        raise ValueError(f"symmetry must be >= 1, got {symmetry}")
+
     x, y = random.uniform(-1, 1), random.uniform(-1, 1)
     color_coord = 0.0
-    BURN_IN = 20
 
     sym_angle = 2.0 * math.pi / symmetry
+    sym_table = [
+        (math.cos(s * sym_angle), math.sin(s * sym_angle))
+        for s in range(symmetry)
+    ]
 
-    for i in range(iterations + BURN_IN):
+    for i in range(iterations + _CHAOS_BURN_IN):
         t = pick_transform()
         x, y = t.apply(x, y)
         color_coord = (color_coord + t.color) * 0.5
 
-        if i < BURN_IN:
+        # Reset if orbit escaped to infinity
+        if not (math.isfinite(x) and math.isfinite(y)):
+            x, y = random.uniform(-1, 1), random.uniform(-1, 1)
+            color_coord = 0.0
+            continue
+
+        if i < _CHAOS_BURN_IN:
             continue
 
         # Apply symmetry — plot point + rotated copies
-        for s in range(symmetry):
-            angle = s * sym_angle
-            cos_s = math.cos(angle)
-            sin_s = math.sin(angle)
+        for cos_s, sin_s in sym_table:
             rx = x * cos_s - y * sin_s
             ry = x * sin_s + y * cos_s
 
