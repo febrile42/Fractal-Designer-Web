@@ -1,6 +1,7 @@
 import math
 import random
 import numpy as np
+from collections.abc import Generator
 from dataclasses import dataclass, field
 from variations import VARIATION_REGISTRY
 from palettes import get_palette
@@ -291,11 +292,12 @@ def _make_image(
     return img
 
 
-# Logarithmic pass fractions — must sum to 1.0
+# Logarithmic pass fractions for the first N-1 passes; the final pass
+# absorbs any truncation remainder so total iterations always equals config quality * w * h.
 _STREAM_FRACTIONS = [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.37]
 
 
-def render_stream(config: dict):
+def render_stream(config: dict) -> Generator[tuple[Image.Image, float], None, None]:
     """Yield (PIL.Image, progress) at logarithmic iteration checkpoints.
 
     progress is a float in (0, 1] representing fraction of total iterations done.

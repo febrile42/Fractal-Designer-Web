@@ -111,6 +111,19 @@ def test_partial_accumulates_across_calls():
     )
     assert counts.sum() > total_after_first
 
+def test_partial_rejects_invalid_symmetry():
+    transforms = build_transforms(num=3, seed=42, variations=["linear"])
+    counts = np.zeros((64, 64), dtype=np.float64)
+    colors = np.zeros((64, 64), dtype=np.float64)
+    with pytest.raises(ValueError, match="symmetry must be >= 1"):
+        run_chaos_game_partial(
+            transforms=transforms,
+            width=64, height=64, iterations=100,
+            symmetry=0,
+            zoom=1.0, rotation=0.0, center=(0.0, 0.0),
+            counts=counts, colors=colors, state=None,
+        )
+
 def test_partial_state_continues_without_burn_in():
     """Second call with existing state must not reset the orbit."""
     transforms = build_transforms(num=3, seed=42, variations=["linear"])
@@ -193,7 +206,9 @@ def test_render_stream_progress_increases():
     assert progresses[-1] <= 1.0
 
 def test_render_stream_final_frame_matches_render():
-    """Last frame of stream must have same dimensions as render() and contain data."""
+    """Last frame of stream must be the same size as render() and must not be blank.
+    Pixel values differ between stream and render() because they use separate RNG sequences.
+    """
     frames = list(render_stream(_SMALL_CONFIG))
     last_img, progress = frames[-1]
     full_img = render(_SMALL_CONFIG)
