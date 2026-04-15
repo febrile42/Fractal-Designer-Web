@@ -47,9 +47,9 @@ def build_gui():
 
     # Pre-create a 1x1 dummy texture so add_image doesn't crash
     with dpg.texture_registry():
-        dpg.add_static_texture(width=1, height=1,
-                               default_value=[0.0, 0.0, 0.0, 0.0],
-                               tag="preview_tex")
+        dpg.add_dynamic_texture(width=1, height=1,
+                                default_value=[0.0, 0.0, 0.0, 0.0],
+                                tag="preview_tex")
 
     with dpg.window(tag="main_win", no_title_bar=True, no_move=True,
                     no_resize=True, no_scrollbar=True):
@@ -232,27 +232,35 @@ def _show_image(img: Image.Image):
                        width=disp_w, height=disp_h, show=True)
 
 
-def _run_render(config: dict, save: bool):
-    _set_buttons_enabled(False)
-    dpg.set_value("status_text", "Rendering…")
+def _run_render(config: dict, save: bool) -> None:
+    with dpg.mutex():
+        _set_buttons_enabled(False)
+        dpg.set_value("status_text", "Rendering…")
     t0 = time.perf_counter()
     try:
-        img = flame_render(config)
+        img = flame_render(config)          # no DPG calls — safe outside mutex
+        if not dpg.is_dearpygui_running():  # window may have closed during render
+            return
         elapsed = time.perf_counter() - t0
-        _show_image(img)
-        if save:
-            path = config["output"]
-            img.save(path)
-            dpg.set_value("status_text",
-                          f"Saved to {path}  ({elapsed:.1f}s)")
-        else:
-            dpg.set_value("status_text",
-                          f"Preview done  ({elapsed:.1f}s)  "
-                          f"{config['width']}×{config['height']}")
+        with dpg.mutex():
+            _show_image(img)
+            if save:
+                path = config["output"]
+                img.save(path)
+                dpg.set_value("status_text",
+                              f"Saved to {path}  ({elapsed:.1f}s)")
+            else:
+                dpg.set_value("status_text",
+                              f"Preview done  ({elapsed:.1f}s)  "
+                              f"{config['width']}×{config['height']}")
     except Exception as e:
-        dpg.set_value("status_text", f"Error: {e}")
+        if dpg.is_dearpygui_running():
+            with dpg.mutex():
+                dpg.set_value("status_text", f"Error: {e}")
     finally:
-        _set_buttons_enabled(True)
+        if dpg.is_dearpygui_running():
+            with dpg.mutex():
+                _set_buttons_enabled(True)
 
 
 def _on_preview():
