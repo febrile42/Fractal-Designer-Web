@@ -55,3 +55,48 @@ def test_chaos_game_has_nonzero_hits():
         zoom=1.0, rotation=0.0, center=(0.0, 0.0),
     )
     assert counts.max() > 0
+
+from engine import tone_map, render
+import numpy as np
+from PIL import Image
+
+def test_tone_map_all_zero_returns_zero():
+    counts = np.zeros((10, 10))
+    result = tone_map(counts, gamma=2.5, brightness=3.0)
+    assert result.max() == 0.0
+
+def test_tone_map_shape_preserved():
+    counts = np.ones((20, 30)) * 100
+    result = tone_map(counts, gamma=2.5, brightness=3.0)
+    assert result.shape == (20, 30)
+
+def test_tone_map_values_in_range():
+    rng = np.random.default_rng(0)
+    counts = rng.integers(0, 1000, size=(50, 50)).astype(float)
+    result = tone_map(counts, gamma=2.5, brightness=3.0)
+    assert result.min() >= 0.0
+    assert result.max() <= 1.0
+
+def test_render_returns_pil_image():
+    config = {
+        "width": 64,
+        "height": 64,
+        "quality": 5,
+        "supersample": 1,
+        "symmetry": 4,
+        "num_transforms": 3,
+        "variations": ["linear", "swirl"],
+        "seed": 1,
+        "zoom": 1.0,
+        "rotation": 0.0,
+        "center": [0.0, 0.0],
+        "palette": "fire",
+        "background": [0, 0, 0],
+        "gamma": 2.5,
+        "brightness": 3.0,
+        "vibrancy": 1.0,
+    }
+    img = render(config)
+    assert isinstance(img, Image.Image)
+    assert img.size == (64, 64)
+    assert img.mode == "RGB"

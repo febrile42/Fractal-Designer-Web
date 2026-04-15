@@ -3,6 +3,8 @@ import random
 import numpy as np
 from dataclasses import dataclass, field
 from variations import VARIATION_REGISTRY
+from palettes import get_palette, sample_palette
+from PIL import Image
 
 _CHAOS_BURN_IN = 20
 
@@ -142,3 +144,78 @@ def run_chaos_game(
                 colors[py, px] = (colors[py, px] + color_coord) * 0.5
 
     return counts, colors
+
+
+def tone_map(
+    counts: np.ndarray,
+    gamma: float,
+    brightness: float,
+) -> np.ndarray:
+    max_count = counts.max()
+    if max_count == 0:
+        return np.zeros_like(counts, dtype=np.float64)
+    log_counts = np.log1p(counts)
+    log_max = math.log1p(max_count)
+    alpha = log_counts / log_max
+    return np.clip(alpha ** (1.0 / gamma) * brightness, 0.0, 1.0)
+
+
+def render(config: dict) -> Image.Image:
+    ss = config.get("supersample", 1)
+    w = config["width"] * ss
+    h = config["height"] * ss
+    quality = config["quality"]
+    iterations = quality * w * h
+
+    transforms = build_transforms(
+        num=config["num_transforms"],
+        seed=config["seed"],
+        variations=config["variations"],
+    )
+
+    counts, color_coords = run_chaos_game(
+        transforms=transforms,
+        width=w,
+        height=h,
+        iterations=iterations,
+        symmetry=config["symmetry"],
+        zoom=config["zoom"],
+        rotation=config["rotation"],
+        center=tuple(config["center"]),
+    )
+
+    luminance = tone_map(counts, config["gamma"], config["brightness"])
+
+    palette_name = config.get("palette", "fire")
+    if isinstance(palette_name, list):
+        stops = palette_name
+    else:
+        stops = get_palette(palette_name)
+
+    vibrancy = config.get("vibrancy", 1.0)
+    bg = config.get("background", [0, 0, 0])
+
+    # Vectorized pixel building
+    flat_coords = color_coords.ravel()
+    palette_rgb = np.array([sample_palette(stops, float(t)) for t in flat_coords],
+                           dtype=np.float64).reshape(h, w, 3)
+
+    lum3 = luminance[:, :, np.newaxis]                          # (h, w, 1)
+    flat_pixels = palette_rgb * lum3                            # luminance-scaled
+
+    safe_vib = max(vibrancy, 0.01)
+    vib_pixels = palette_rgb * (lum3 ** (1.0 / safe_vib))      # vibrancy-scaled
+
+    blended = flat_pixels * (1 - vibrancy) + vib_pixels * vibrancy
+    blended = np.clip(blended, 0, 255).astype(np.uint8)
+
+    # Apply background where luminance is near zero
+    mask = luminance < 1e-6
+    blended[mask] = bg
+
+    pixels = blended
+
+    img = Image.fromarray(pixels, "RGB")
+    if ss > 1:
+        img = img.resize((config["width"], config["height"]), Image.LANCZOS)
+    return img
