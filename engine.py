@@ -291,6 +291,49 @@ def _make_image(
     return img
 
 
+# Logarithmic pass fractions — must sum to 1.0
+_STREAM_FRACTIONS = [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.37]
+
+
+def render_stream(config: dict):
+    """Yield (PIL.Image, progress) at logarithmic iteration checkpoints.
+
+    progress is a float in (0, 1] representing fraction of total iterations done.
+    """
+    ss = config.get("supersample", 1)
+    w = config["width"] * ss
+    h = config["height"] * ss
+    total = config["quality"] * w * h
+
+    transforms = build_transforms(
+        num=config["num_transforms"],
+        seed=config["seed"],
+        variations=config["variations"],
+    )
+
+    counts = np.zeros((h, w), dtype=np.float64)
+    colors = np.zeros((h, w), dtype=np.float64)
+    state = None
+    done = 0
+
+    for frac in _STREAM_FRACTIONS:
+        chunk = max(1, int(total * frac))
+        counts, colors, state = run_chaos_game_partial(
+            transforms=transforms,
+            width=w, height=h,
+            iterations=chunk,
+            symmetry=config["symmetry"],
+            zoom=config["zoom"],
+            rotation=config["rotation"],
+            center=tuple(config["center"]),
+            counts=counts,
+            colors=colors,
+            state=state,
+        )
+        done += chunk
+        yield _make_image(counts, colors, config, ss), min(done / total, 1.0)
+
+
 def render(config: dict) -> Image.Image:
     ss = config.get("supersample", 1)
     w = config["width"] * ss

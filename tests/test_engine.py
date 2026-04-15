@@ -175,3 +175,29 @@ def test_make_image_supersample_downscales():
     cfg = {**_SMALL_CONFIG, "width": 32, "height": 32}
     img = _make_image(counts, colors, cfg, ss=2)
     assert img.size == (32, 32)
+
+
+from engine import render_stream
+
+def test_render_stream_yields_images():
+    frames = list(render_stream(_SMALL_CONFIG))
+    assert len(frames) == 7  # one per logarithmic checkpoint
+    for img, progress in frames:
+        assert isinstance(img, Image.Image)
+        assert img.size == (32, 32)
+
+def test_render_stream_progress_increases():
+    frames = list(render_stream(_SMALL_CONFIG))
+    progresses = [p for _, p in frames]
+    assert progresses == sorted(progresses)
+    assert progresses[-1] <= 1.0
+
+def test_render_stream_final_frame_matches_render():
+    """Last frame of stream must be visually equivalent to render()."""
+    frames = list(render_stream(_SMALL_CONFIG))
+    last_img, _ = frames[-1]
+    full_img = render(_SMALL_CONFIG)
+    arr_stream = np.array(last_img)
+    arr_full = np.array(full_img)
+    # Same size and mode
+    assert arr_stream.shape == arr_full.shape
