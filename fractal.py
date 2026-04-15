@@ -2,7 +2,7 @@ import dearpygui.dearpygui as dpg
 import threading
 import time
 import numpy as np
-from engine import render as flame_render
+from engine import render as flame_render, render_stream
 from PIL import Image
 
 # ── Default config ────────────────────────────────────────────────────────────
@@ -46,10 +46,10 @@ def build_gui():
     dpg.setup_dearpygui()
 
     # Pre-create a 1x1 dummy texture so add_image doesn't crash
-    with dpg.texture_registry():
-        dpg.add_dynamic_texture(width=1, height=1,
-                                default_value=[0.0, 0.0, 0.0, 0.0],
-                                tag="preview_tex")
+    with dpg.texture_registry(tag="tex_registry"):
+        dpg.add_static_texture(width=1, height=1,
+                               default_value=[0.0, 0.0, 0.0, 0.0],
+                               tag="preview_tex")
 
     with dpg.window(tag="main_win", no_title_bar=True, no_move=True,
                     no_resize=True, no_scrollbar=True):
@@ -89,14 +89,17 @@ def _build_output_group():
         with dpg.group(horizontal=True):
             for label in ASPECT_PRESETS:
                 dpg.add_button(label=label,
-                               callback=lambda s, a, u=label: _apply_aspect(u),
+                               callback=lambda s, a, u: _apply_aspect(u),
+                               user_data=label,
                                width=55)
+        dpg.add_text("", tag="aspect_selected")
 
 
 def _apply_aspect(label: str):
     w, h = ASPECT_PRESETS[label]
     dpg.set_value("cfg_width", w)
     dpg.set_value("cfg_height", h)
+    dpg.set_value("aspect_selected", f"Selected: {label}  ({w}×{h})")
 
 
 def _build_quality_group():
@@ -218,9 +221,8 @@ def _show_image(img: Image.Image):
     if dpg.does_item_exist("preview_tex"):
         dpg.delete_item("preview_tex")
 
-    with dpg.texture_registry():
-        dpg.add_static_texture(width=w, height=h, default_value=flat,
-                               tag="preview_tex")
+    dpg.add_static_texture(width=w, height=h, default_value=flat,
+                           tag="preview_tex", parent="tex_registry")
 
     # Scale image to fit right panel (max width = panel width - 20px padding)
     panel_w = dpg.get_item_width("right_panel")
@@ -237,13 +239,21 @@ def _run_render(config: dict, save: bool) -> None:
         _set_buttons_enabled(False)
         dpg.set_value("status_text", "Rendering…")
     t0 = time.perf_counter()
+    img = None
     try:
-        img = flame_render(config)          # no DPG calls — safe outside mutex
-        if not dpg.is_dearpygui_running():  # window may have closed during render
+        for img, progress in render_stream(config):
+            if not dpg.is_dearpygui_running():
+                return
+            pct = int(progress * 100)
+            with dpg.mutex():
+                _show_image(img)
+                dpg.set_value("status_text", f"Rendering… {pct}%")
+
+        if img is None or not dpg.is_dearpygui_running():
             return
+
         elapsed = time.perf_counter() - t0
         with dpg.mutex():
-            _show_image(img)
             if save:
                 path = config["output"]
                 img.save(path)
