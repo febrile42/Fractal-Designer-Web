@@ -125,7 +125,7 @@ def test_partial_rejects_invalid_symmetry():
         )
 
 def test_partial_state_continues_without_burn_in():
-    """Second call with existing state must not reset the orbit."""
+    """Second call with existing state must not reset the orbits."""
     transforms = build_transforms(num=3, seed=42, variations=["linear"])
     zeros = np.zeros((64, 64), dtype=np.float64)
     _, _, state = run_chaos_game_partial(
@@ -134,8 +134,8 @@ def test_partial_state_continues_without_burn_in():
         symmetry=1, zoom=1.0, rotation=0.0, center=(0.0, 0.0),
         counts=zeros.copy(), colors=zeros.copy(), state=None,
     )
-    x, y, c = state
-    assert math.isfinite(x) and math.isfinite(y) and math.isfinite(c)
+    # GPU state is a batch counter (int), not an orbit position
+    assert isinstance(state, int) and state > 0
 
 def test_render_returns_pil_image():
     config = {

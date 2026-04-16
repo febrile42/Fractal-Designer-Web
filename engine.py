@@ -1,11 +1,13 @@
 import math
 import random
 import numpy as np
+import cupy as cp
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from variations import VARIATION_REGISTRY
 from palettes import get_palette
 from PIL import Image
+from engine_gpu import prepare_transforms, launch, gpu_tone_map, gpu_make_image
 
 _CHAOS_BURN_IN = 20
 
@@ -50,7 +52,6 @@ def build_transforms(
     raw_weights = [rng.uniform(0.3, 1.0) for _ in range(num)]
     total = sum(raw_weights)
     for i in range(num):
-        # Random affine coefficients — bounded to keep orbits from exploding
         a = rng.uniform(-1.0, 1.0)
         b = rng.uniform(-0.5, 0.5)
         c = rng.uniform(-0.5, 0.5)
@@ -78,73 +79,23 @@ def run_chaos_game(
     rotation: float,
     center: tuple[float, float],
 ) -> tuple[np.ndarray, np.ndarray]:
-    counts = np.zeros((height, width), dtype=np.float64)
-    colors = np.zeros((height, width), dtype=np.float64)
-
-    # Camera: scale and rotation matrix
-    scale = min(width, height) * 0.35 * zoom
-    rot_rad = math.radians(rotation)
-    cos_r = math.cos(rot_rad)
-    sin_r = math.sin(rot_rad)
-    cx, cy = center
-
-    # Cumulative weights for weighted random selection
-    cum_weights = []
-    running = 0.0
-    for t in transforms:
-        running += t.weight
-        cum_weights.append(running)
-
-    def pick_transform() -> Transform:
-        r = random.random()
-        for i, cw in enumerate(cum_weights):
-            if r <= cw:
-                return transforms[i]
-        return transforms[-1]
-
     if symmetry < 1:
         raise ValueError(f"symmetry must be >= 1, got {symmetry}")
 
-    x, y = random.uniform(-1, 1), random.uniform(-1, 1)
-    color_coord = 0.0
+    var_names = list(transforms[0].variations.keys())
+    tdata = prepare_transforms(transforms, var_names)
+    counts_gpu = cp.zeros((height, width), dtype=cp.float32)
+    csum_gpu = cp.zeros((height, width), dtype=cp.float32)
 
-    sym_angle = 2.0 * math.pi / symmetry
-    sym_table = [
-        (math.cos(s * sym_angle), math.sin(s * sym_angle))
-        for s in range(symmetry)
-    ]
+    launch(tdata, width, height, iterations, symmetry, zoom, rotation,
+           center, counts_gpu, csum_gpu)
 
-    for i in range(iterations + _CHAOS_BURN_IN):
-        t = pick_transform()
-        x, y = t.apply(x, y)
-        color_coord = (color_coord + t.color) * 0.5
+    # Convert accumulated color_sum to color average for API compat
+    safe = cp.where(counts_gpu > 0, counts_gpu, cp.float32(1.0))
+    cavg = cp.where(counts_gpu > 0, csum_gpu / safe, cp.float32(0.0))
 
-        # Reset if orbit escaped to infinity
-        if not (math.isfinite(x) and math.isfinite(y)):
-            x, y = random.uniform(-1, 1), random.uniform(-1, 1)
-            color_coord = 0.0
-            continue
-
-        if i < _CHAOS_BURN_IN:
-            continue
-
-        # Apply symmetry — plot point + rotated copies
-        for cos_s, sin_s in sym_table:
-            rx = x * cos_s - y * sin_s
-            ry = x * sin_s + y * cos_s
-
-            # Camera transform
-            wx = (rx - cx) * cos_r - (ry - cy) * sin_r
-            wy = (rx - cx) * sin_r + (ry - cy) * cos_r
-
-            px = int(wx * scale + width / 2)
-            py = int(wy * scale + height / 2)
-
-            if 0 <= px < width and 0 <= py < height:
-                counts[py, px] += 1
-                colors[py, px] = (colors[py, px] + color_coord) * 0.5
-
-    return counts, colors
+    return (cp.asnumpy(counts_gpu).astype(np.float64),
+            cp.asnumpy(cavg).astype(np.float64))
 
 
 def run_chaos_game_partial(
@@ -158,79 +109,29 @@ def run_chaos_game_partial(
     center: tuple[float, float],
     counts: np.ndarray,
     colors: np.ndarray,
-    state: tuple[float, float, float] | None,
-) -> tuple[np.ndarray, np.ndarray, tuple[float, float, float]]:
-    """Run `iterations` chaos game steps, accumulating into existing arrays.
+    state: int | None,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Run iterations on GPU, accumulating into existing arrays.
 
-    Pass state=None on the first call to trigger burn-in.
-    Returns (counts, colors, state) where state=(x, y, color_coord).
+    state is an integer batch counter (or None for first call).
+    Returns (counts, color_sum, next_state).
     """
     if symmetry < 1:
         raise ValueError(f"symmetry must be >= 1, got {symmetry}")
 
-    scale = min(width, height) * 0.35 * zoom
-    rot_rad = math.radians(rotation)
-    cos_r = math.cos(rot_rad)
-    sin_r = math.sin(rot_rad)
-    cx, cy = center
+    var_names = list(transforms[0].variations.keys())
+    batch = 0 if state is None else state
+    tdata = prepare_transforms(transforms, var_names)
 
-    cum_weights: list[float] = []
-    running = 0.0
-    for t in transforms:
-        running += t.weight
-        cum_weights.append(running)
+    counts_gpu = cp.asarray(counts, dtype=cp.float32)
+    csum_gpu = cp.asarray(colors, dtype=cp.float32)
 
-    def pick_transform() -> Transform:
-        r = random.random()
-        for i, cw in enumerate(cum_weights):
-            if r <= cw:
-                return transforms[i]
-        return transforms[-1]
+    launch(tdata, width, height, iterations, symmetry, zoom, rotation,
+           tuple(center), counts_gpu, csum_gpu, seed_offset=batch)
 
-    sym_angle = 2.0 * math.pi / symmetry
-    sym_table = [
-        (math.cos(s * sym_angle), math.sin(s * sym_angle))
-        for s in range(symmetry)
-    ]
-
-    if state is None:
-        x, y = random.uniform(-1, 1), random.uniform(-1, 1)
-        color_coord = 0.0
-        for _ in range(_CHAOS_BURN_IN):
-            t = pick_transform()
-            x, y = t.apply(x, y)
-            color_coord = (color_coord + t.color) * 0.5
-            if not (math.isfinite(x) and math.isfinite(y)):
-                x, y = random.uniform(-1, 1), random.uniform(-1, 1)
-                color_coord = 0.0
-    else:
-        x, y, color_coord = state
-
-    for _ in range(iterations):
-        t = pick_transform()
-        x, y = t.apply(x, y)
-        color_coord = (color_coord + t.color) * 0.5
-
-        if not (math.isfinite(x) and math.isfinite(y)):
-            x, y = random.uniform(-1, 1), random.uniform(-1, 1)
-            color_coord = 0.0
-            continue
-
-        for cos_s, sin_s in sym_table:
-            rx = x * cos_s - y * sin_s
-            ry = x * sin_s + y * cos_s
-
-            wx = (rx - cx) * cos_r - (ry - cy) * sin_r
-            wy = (rx - cx) * sin_r + (ry - cy) * cos_r
-
-            px = int(wx * scale + width / 2)
-            py = int(wy * scale + height / 2)
-
-            if 0 <= px < width and 0 <= py < height:
-                counts[py, px] += 1
-                colors[py, px] = (colors[py, px] + color_coord) * 0.5
-
-    return counts, colors, (x, y, color_coord)
+    return (cp.asnumpy(counts_gpu).astype(np.float64),
+            cp.asnumpy(csum_gpu).astype(np.float64),
+            batch + 1)
 
 
 def tone_map(
@@ -240,14 +141,9 @@ def tone_map(
 ) -> np.ndarray:
     if gamma <= 0:
         raise ValueError(f"gamma must be > 0, got {gamma}")
-    counts = np.clip(counts, 0, None)   # guard against negative counts
-    max_count = counts.max()
-    if max_count == 0:
-        return np.zeros_like(counts, dtype=np.float64)
-    log_counts = np.log1p(counts)
-    log_max = math.log1p(max_count)
-    alpha = log_counts / log_max
-    return np.clip(alpha ** (1.0 / gamma) * brightness, 0.0, 1.0)
+    counts_gpu = cp.asarray(counts, dtype=cp.float32)
+    result = gpu_tone_map(counts_gpu, gamma, brightness)
+    return cp.asnumpy(result).astype(np.float64)
 
 
 def _make_image(
@@ -256,87 +152,59 @@ def _make_image(
     config: dict,
     ss: int,
 ) -> Image.Image:
-    """Tone-map and colorize accumulated arrays into a PIL Image."""
-    luminance = tone_map(counts, config["gamma"], config["brightness"])
+    """Tone-map and colorize accumulated arrays into a PIL Image.
 
-    palette_name = config.get("palette", "fire")
-    stops = palette_name if isinstance(palette_name, list) else get_palette(palette_name)
-
-    vibrancy = float(np.clip(config.get("vibrancy", 1.0), 0.0, 1.0))
-    bg = config.get("background", [0, 0, 0])
-
-    stops_arr = np.array(stops, dtype=np.float64)          # (N, 3)
-    n = len(stops) - 1
-    t_clamped = np.clip(colors, 0.0, 1.0)
-    scaled = t_clamped * n
-    lo = np.floor(scaled).astype(np.int32)
-    hi = np.minimum(lo + 1, n)
-    frac = (scaled - lo)[..., np.newaxis]
-    palette_rgb = stops_arr[lo] + (stops_arr[hi] - stops_arr[lo]) * frac
-
-    lum3 = luminance[:, :, np.newaxis]
-    flat_pixels = palette_rgb * lum3
-
-    safe_vib = max(vibrancy, 0.01)
-    vib_pixels = palette_rgb * (lum3 ** (1.0 / safe_vib))
-
-    blended = flat_pixels * (1 - vibrancy) + vib_pixels * vibrancy
-    blended = np.round(np.clip(blended, 0, 255)).astype(np.uint8)
-
-    mask = luminance < 1e-6
-    blended[mask] = bg
-
-    img = Image.fromarray(blended, "RGB")
-    if ss > 1:
-        img = img.resize((config["width"], config["height"]), Image.LANCZOS)
-    return img
+    `colors` is color averages in [0, 1]. GPU is used for all computation.
+    """
+    counts_gpu = cp.asarray(counts, dtype=cp.float32)
+    colors_gpu = cp.asarray(colors, dtype=cp.float32)
+    # Reconstruct color_sum from averages so gpu_make_image can work
+    csum_gpu = colors_gpu * counts_gpu
+    return gpu_make_image(counts_gpu, csum_gpu, config, ss)
 
 
-# Logarithmic pass fractions for the first N-1 passes; the final pass
-# absorbs any truncation remainder so total iterations always equals config quality * w * h.
+# Logarithmic pass fractions for streaming preview
 _STREAM_FRACTIONS = [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.37]
 
 
 def render_stream(config: dict) -> Generator[tuple[Image.Image, float], None, None]:
     """Yield (PIL.Image, progress) at logarithmic iteration checkpoints.
 
-    progress is a float in (0, 1] representing fraction of total iterations done.
+    All computation runs on GPU. Only the final PIL image transfers to CPU.
     """
     ss = config.get("supersample", 1)
     w = config["width"] * ss
     h = config["height"] * ss
     total = config["quality"] * w * h
+    seed = config.get("seed", 42)
 
     transforms = build_transforms(
         num=config["num_transforms"],
-        seed=config["seed"],
+        seed=seed,
         variations=config["variations"],
     )
 
-    counts = np.zeros((h, w), dtype=np.float64)
-    colors = np.zeros((h, w), dtype=np.float64)
-    state = None
+    var_names = config["variations"]
+    tdata = prepare_transforms(transforms, var_names)
+
+    # GPU arrays persist across chunks — no CPU round-trip between frames
+    counts_gpu = cp.zeros((h, w), dtype=cp.float32)
+    csum_gpu = cp.zeros((h, w), dtype=cp.float32)
     done = 0
 
     for i, frac in enumerate(_STREAM_FRACTIONS):
         if i == len(_STREAM_FRACTIONS) - 1:
-            chunk = max(1, total - done)  # absorb any truncation remainder
+            chunk = max(1, total - done)
         else:
             chunk = max(1, int(total * frac))
-        counts, colors, state = run_chaos_game_partial(
-            transforms=transforms,
-            width=w, height=h,
-            iterations=chunk,
-            symmetry=config["symmetry"],
-            zoom=config["zoom"],
-            rotation=config["rotation"],
-            center=tuple(config["center"]),
-            counts=counts,
-            colors=colors,
-            state=state,
-        )
+
+        launch(tdata, w, h, chunk, config["symmetry"], config["zoom"],
+               config["rotation"], tuple(config["center"]),
+               counts_gpu, csum_gpu, seed_offset=i, base_seed=seed)
         done += chunk
-        yield _make_image(counts, colors, config, ss), min(done / total, 1.0)
+
+        img = gpu_make_image(counts_gpu, csum_gpu, config, ss)
+        yield img, min(done / total, 1.0)
 
 
 def render(config: dict) -> Image.Image:
@@ -344,21 +212,22 @@ def render(config: dict) -> Image.Image:
     w = config["width"] * ss
     h = config["height"] * ss
     iterations = config["quality"] * w * h
+    seed = config.get("seed", 42)
 
     transforms = build_transforms(
         num=config["num_transforms"],
-        seed=config["seed"],
+        seed=seed,
         variations=config["variations"],
     )
 
-    counts, color_coords = run_chaos_game(
-        transforms=transforms,
-        width=w, height=h,
-        iterations=iterations,
-        symmetry=config["symmetry"],
-        zoom=config["zoom"],
-        rotation=config["rotation"],
-        center=tuple(config["center"]),
-    )
+    var_names = config["variations"]
+    tdata = prepare_transforms(transforms, var_names)
 
-    return _make_image(counts, color_coords, config, ss)
+    counts_gpu = cp.zeros((h, w), dtype=cp.float32)
+    csum_gpu = cp.zeros((h, w), dtype=cp.float32)
+
+    launch(tdata, w, h, iterations, config["symmetry"], config["zoom"],
+           config["rotation"], tuple(config["center"]),
+           counts_gpu, csum_gpu, base_seed=seed)
+
+    return gpu_make_image(counts_gpu, csum_gpu, config, ss)
