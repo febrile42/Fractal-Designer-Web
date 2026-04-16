@@ -1,0 +1,29 @@
+{
+  "width": 3840,
+  "height": 2160,
+  "output": "laptopskin.png",
+  "quality": 500,
+  "supersample": 2,
+  "symmetry": 5,
+  "num_transforms": 6,
+  "variations": [
+    "spherical",
+    "curl"
+  ],
+  "seed": 77,
+  "zoom": 0.8999999761581421,
+  "rotation": 45.0,
+  "center": [
+    0.0,
+    0.0
+  ],
+  "palette": "synthwave",
+  "background": [
+    20,
+    5,
+    20
+  ],
+  "gamma": 0.3894577006785887,
+  "brightness": 5.0,
+  "vibrancy": 0.8999999761581421
+}
