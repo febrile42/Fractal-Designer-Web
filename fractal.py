@@ -228,6 +228,8 @@ def _show_texture(flat: list, w: int, h: int) -> None:
     """Upload pre-converted texture data to DPG. Must be called under dpg.mutex()."""
     if dpg.does_item_exist("preview_tex"):
         dpg.delete_item("preview_tex")
+    if dpg.does_alias_exist("preview_tex"):
+        dpg.remove_alias("preview_tex")
 
     dpg.add_static_texture(width=w, height=h, default_value=flat,
                            tag="preview_tex", parent="tex_registry")
