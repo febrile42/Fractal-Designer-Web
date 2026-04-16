@@ -10,6 +10,9 @@ from PIL import Image
 # Background threads enqueue callables here; the render loop drains them.
 _main_queue: queue.SimpleQueue = queue.SimpleQueue()
 
+# Set by the Cancel button; checked between render frames.
+_cancel_event = threading.Event()
+
 # ── Default config ────────────────────────────────────────────────────────────
 CONFIG = {
     "width": 1080,
@@ -180,6 +183,8 @@ def _build_buttons():
                        callback=_on_preview, width=140, height=36)
         dpg.add_button(label="Render & Save", tag="btn_render",
                        callback=_on_render, width=150, height=36)
+        dpg.add_button(label="Cancel", tag="btn_cancel",
+                       callback=_on_cancel, width=80, height=36, show=False)
 
 
 def collect_config() -> dict:
@@ -235,8 +240,11 @@ def _show_texture(flat: list, w: int, h: int) -> None:
                            tag="preview_tex", parent="tex_registry")
 
     panel_w = dpg.get_item_width("right_panel")
-    max_w = max(panel_w - 20, 100)
-    scale = min(1.0, max_w / w)
+    panel_h = dpg.get_item_height("right_panel")
+    status_h = dpg.get_item_height("status_text")
+    avail_w = max(panel_w - 20, 100)
+    avail_h = max(panel_h - status_h - 20, 100)
+    scale = min(1.0, avail_w / w, avail_h / h)
     disp_w, disp_h = int(w * scale), int(h * scale)
 
     dpg.configure_item("preview_img", texture_tag="preview_tex",
@@ -244,13 +252,20 @@ def _show_texture(flat: list, w: int, h: int) -> None:
 
 
 def _run_render(config: dict, save: bool) -> None:
-    _main_queue.put(lambda: (_set_buttons_enabled(False),
-                             dpg.set_value("status_text", "Rendering…")))
+    _cancel_event.clear()
+    _main_queue.put(lambda: (
+        _set_buttons_enabled(False),
+        dpg.configure_item("btn_cancel", show=True),
+        dpg.set_value("status_text", "Rendering…"),
+    ))
     t0 = time.perf_counter()
     img = None
     try:
         for img, progress in render_stream(config):
             if not dpg.is_dearpygui_running():
+                return
+            if _cancel_event.is_set():
+                _main_queue.put(lambda: dpg.set_value("status_text", "Cancelled"))
                 return
             pct = int(progress * 100)
             flat, w, h = _prepare_texture(img)
@@ -276,7 +291,14 @@ def _run_render(config: dict, save: bool) -> None:
         _main_queue.put(lambda msg=f"Error: {e}":
                         dpg.set_value("status_text", msg))
     finally:
-        _main_queue.put(lambda: _set_buttons_enabled(True))
+        _main_queue.put(lambda: (
+            _set_buttons_enabled(True),
+            dpg.configure_item("btn_cancel", show=False),
+        ))
+
+
+def _on_cancel():
+    _cancel_event.set()
 
 
 def _on_preview():
