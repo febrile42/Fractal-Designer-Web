@@ -66,7 +66,7 @@ def build_gui():
 
             # ── LEFT PANEL ────────────────────────────────────────────
             with dpg.child_window(tag="left_panel", width=PANEL_W,
-                                  border=False, auto_resize_y=True):
+                                  border=False):
                 _build_output_group()
                 _build_quality_group()
                 _build_shape_group()
@@ -76,13 +76,21 @@ def build_gui():
                 _build_buttons()
 
             # ── RIGHT PANEL ───────────────────────────────────────────
-            with dpg.child_window(tag="right_panel", border=False,
-                                  auto_resize_y=True):
+            with dpg.child_window(tag="right_panel", border=False):
                 dpg.add_text("Press [Preview] to render", tag="status_text")
                 dpg.add_image(texture_tag="preview_tex", tag="preview_img",
                               show=False)
 
     dpg.set_primary_window("main_win", True)
+
+    # Keep panels sized to viewport
+    def _on_resize():
+        vw = dpg.get_viewport_client_width()
+        vh = dpg.get_viewport_client_height()
+        dpg.configure_item("right_panel", width=vw - PANEL_W, height=vh)
+        dpg.configure_item("left_panel", height=vh)
+
+    dpg.set_viewport_resize_callback(lambda s, a: _on_resize())
 
 
 def _build_output_group():
@@ -244,7 +252,7 @@ def _show_texture(flat: list, w: int, h: int) -> None:
     status_h = dpg.get_item_height("status_text")
     avail_w = max(panel_w - 20, 100)
     avail_h = max(panel_h - status_h - 20, 100)
-    scale = min(1.0, avail_w / w, avail_h / h)
+    scale = min(avail_w / w, avail_h / h)
     disp_w, disp_h = int(w * scale), int(h * scale)
 
     dpg.configure_item("preview_img", texture_tag="preview_tex",
@@ -313,9 +321,21 @@ def _on_render():
     threading.Thread(target=_run_render, args=(cfg, True), daemon=True).start()
 
 
+def _apply_initial_sizing():
+    """Set panel sizes to match the viewport on startup."""
+    vw = dpg.get_viewport_client_width()
+    vh = dpg.get_viewport_client_height()
+    if vw > 0 and vh > 0:
+        dpg.configure_item("right_panel", width=vw - PANEL_W, height=vh)
+        dpg.configure_item("left_panel", height=vh)
+
+
 if __name__ == "__main__":
     build_gui()
     dpg.show_viewport()
+    # Render one frame so viewport dimensions are available, then size panels
+    dpg.render_dearpygui_frame()
+    _apply_initial_sizing()
     while dpg.is_dearpygui_running():
         # Drain main-thread callbacks (texture uploads, status updates, etc.)
         try:
