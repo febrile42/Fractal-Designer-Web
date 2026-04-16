@@ -1,9 +1,14 @@
 import dearpygui.dearpygui as dpg
 import threading
 import time
+import queue
 import numpy as np
 from engine import render_stream
 from PIL import Image
+
+# All DPG item creation/modification must happen on the main thread.
+# Background threads enqueue callables here; the render loop drains them.
+_main_queue: queue.SimpleQueue = queue.SimpleQueue()
 
 # ── Default config ────────────────────────────────────────────────────────────
 CONFIG = {
@@ -237,9 +242,8 @@ def _show_texture(flat: list, w: int, h: int) -> None:
 
 
 def _run_render(config: dict, save: bool) -> None:
-    with dpg.mutex():
-        _set_buttons_enabled(False)
-        dpg.set_value("status_text", "Rendering…")
+    _main_queue.put(lambda: (_set_buttons_enabled(False),
+                             dpg.set_value("status_text", "Rendering…")))
     t0 = time.perf_counter()
     img = None
     try:
@@ -247,33 +251,30 @@ def _run_render(config: dict, save: bool) -> None:
             if not dpg.is_dearpygui_running():
                 return
             pct = int(progress * 100)
-            flat, w, h = _prepare_texture(img)   # CPU work outside mutex
-            with dpg.mutex():
-                _show_texture(flat, w, h)
-                dpg.set_value("status_text", f"Rendering… {pct}%")
+            flat, w, h = _prepare_texture(img)
+            _main_queue.put(lambda f=flat, W=w, H=h, p=pct: (
+                _show_texture(f, W, H),
+                dpg.set_value("status_text", f"Rendering… {p}%"),
+            ))
 
         if img is None or not dpg.is_dearpygui_running():
             return
 
         elapsed = time.perf_counter() - t0
-        with dpg.mutex():
-            if save:
-                path = config["output"]
-                img.save(path)
-                dpg.set_value("status_text",
-                              f"Saved to {path}  ({elapsed:.1f}s)")
-            else:
-                dpg.set_value("status_text",
-                              f"Preview done  ({elapsed:.1f}s)  "
-                              f"{config['width']}×{config['height']}")
+        if save:
+            path = config["output"]
+            img.save(path)
+            _main_queue.put(lambda msg=f"Saved to {path}  ({elapsed:.1f}s)":
+                            dpg.set_value("status_text", msg))
+        else:
+            msg = (f"Preview done  ({elapsed:.1f}s)  "
+                   f"{config['width']}×{config['height']}")
+            _main_queue.put(lambda m=msg: dpg.set_value("status_text", m))
     except Exception as e:
-        if dpg.is_dearpygui_running():
-            with dpg.mutex():
-                dpg.set_value("status_text", f"Error: {e}")
+        _main_queue.put(lambda msg=f"Error: {e}":
+                        dpg.set_value("status_text", msg))
     finally:
-        if dpg.is_dearpygui_running():
-            with dpg.mutex():
-                _set_buttons_enabled(True)
+        _main_queue.put(lambda: _set_buttons_enabled(True))
 
 
 def _on_preview():
@@ -291,5 +292,12 @@ def _on_render():
 if __name__ == "__main__":
     build_gui()
     dpg.show_viewport()
-    dpg.start_dearpygui()
+    while dpg.is_dearpygui_running():
+        # Drain main-thread callbacks (texture uploads, status updates, etc.)
+        try:
+            while True:
+                _main_queue.get_nowait()()
+        except queue.Empty:
+            pass
+        dpg.render_dearpygui_frame()
     dpg.destroy_context()
