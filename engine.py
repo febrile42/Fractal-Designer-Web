@@ -1,13 +1,37 @@
+from __future__ import annotations
+
 import math
 import random
 import numpy as np
-import cupy as cp
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from variations import VARIATION_REGISTRY
 from palettes import get_palette
 from PIL import Image
-from engine_gpu import prepare_transforms, launch, gpu_tone_map, gpu_make_image
+
+try:
+    import cupy as cp
+    from engine_gpu import prepare_transforms, launch, gpu_tone_map, gpu_make_image
+    GPU_AVAILABLE = True
+    BACKEND = "cuda"
+    _to_numpy = cp.asnumpy
+except (ImportError, ModuleNotFoundError):
+    import numpy as cp  # type: ignore[assignment]
+    _to_numpy = np.asarray
+    try:
+        from engine_metal import (  # type: ignore[assignment]
+            prepare_transforms, launch,
+            gpu_tone_map, gpu_make_image,
+        )
+        GPU_AVAILABLE = True
+        BACKEND = "metal"
+    except (ImportError, ModuleNotFoundError, Exception):
+        from engine_cpu import (  # type: ignore[assignment]
+            prepare_transforms, launch,
+            gpu_tone_map, gpu_make_image,
+        )
+        GPU_AVAILABLE = False
+        BACKEND = "cpu"
 
 _CHAOS_BURN_IN = 20
 
@@ -94,8 +118,8 @@ def run_chaos_game(
     safe = cp.where(counts_gpu > 0, counts_gpu, cp.float32(1.0))
     cavg = cp.where(counts_gpu > 0, csum_gpu / safe, cp.float32(0.0))
 
-    return (cp.asnumpy(counts_gpu).astype(np.float64),
-            cp.asnumpy(cavg).astype(np.float64))
+    return (_to_numpy(counts_gpu).astype(np.float64),
+            _to_numpy(cavg).astype(np.float64))
 
 
 def run_chaos_game_partial(
@@ -129,8 +153,8 @@ def run_chaos_game_partial(
     launch(tdata, width, height, iterations, symmetry, zoom, rotation,
            tuple(center), counts_gpu, csum_gpu, seed_offset=batch)
 
-    return (cp.asnumpy(counts_gpu).astype(np.float64),
-            cp.asnumpy(csum_gpu).astype(np.float64),
+    return (_to_numpy(counts_gpu).astype(np.float64),
+            _to_numpy(csum_gpu).astype(np.float64),
             batch + 1)
 
 
@@ -143,7 +167,7 @@ def tone_map(
         raise ValueError(f"gamma must be > 0, got {gamma}")
     counts_gpu = cp.asarray(counts, dtype=cp.float32)
     result = gpu_tone_map(counts_gpu, gamma, brightness)
-    return cp.asnumpy(result).astype(np.float64)
+    return _to_numpy(result).astype(np.float64)
 
 
 def _make_image(
@@ -167,10 +191,14 @@ def _make_image(
 _STREAM_FRACTIONS = [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.37]
 
 
-def render_stream(config: dict) -> Generator[tuple[Image.Image, float], None, None]:
+def render_stream(
+    config: dict,
+    cancel_event=None,
+) -> Generator[tuple[Image.Image, float], None, None]:
     """Yield (PIL.Image, progress) at logarithmic iteration checkpoints.
 
     All computation runs on GPU. Only the final PIL image transfers to CPU.
+    If cancel_event (threading.Event) is set between yields, stops early.
     """
     ss = config.get("supersample", 1)
     w = config["width"] * ss
@@ -193,6 +221,9 @@ def render_stream(config: dict) -> Generator[tuple[Image.Image, float], None, No
     done = 0
 
     for i, frac in enumerate(_STREAM_FRACTIONS):
+        if cancel_event is not None and cancel_event.is_set():
+            return
+
         if i == len(_STREAM_FRACTIONS) - 1:
             chunk = max(1, total - done)
         else:
