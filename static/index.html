@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fractal Designer</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  display: flex;
+  height: 100vh;
+  background: #0a0a0f;
+  color: #ccc;
+  font: 13px/1.5 system-ui, sans-serif;
+  overflow: hidden;
+}
+
+#sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #111118;
+  border-right: 1px solid #222;
+  overflow-y: auto;
+}
+
+#sidebar h1 {
+  padding: 14px 16px 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #eee;
+  letter-spacing: .04em;
+  border-bottom: 1px solid #222;
+}
+
+#gpu-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+  vertical-align: middle;
+  background: #1a3a1a;
+  color: #6f6;
+}
+#gpu-badge.unavailable { background: #3a1a1a; color: #f66; }
+
+#controls { padding: 10px 14px; flex: 1; }
+
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  color: #555;
+  text-transform: uppercase;
+  margin: 14px 0 6px;
+}
+
+.row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.row label { min-width: 96px; color: #888; font-size: 12px; flex-shrink: 0; }
+
+input[type=range] { flex: 1; accent-color: #7060e0; cursor: pointer; }
+
+.val {
+  min-width: 32px;
+  text-align: right;
+  color: #aaa;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+input[type=number] {
+  width: 70px;
+  background: #1c1c28;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #ccc;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+select {
+  flex: 1;
+  background: #1c1c28;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #ccc;
+  padding: 4px 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#var-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+  margin-bottom: 4px;
+}
+#var-grid label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #999;
+  cursor: pointer;
+  min-width: unset;
+}
+input[type=checkbox] { accent-color: #7060e0; cursor: pointer; }
+
+#btn-row {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid #222;
+  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  background: #111118;
+}
+
+button {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity .15s;
+}
+button:disabled { opacity: .4; cursor: default; }
+
+#btn-render { background: #6050d0; color: #fff; }
+#btn-render:not(:disabled):hover { background: #7060e0; }
+#btn-render.cancelling { background: #802020; }
+
+#btn-random, #btn-save {
+  background: #1e1e2e;
+  color: #aaa;
+  border: 1px solid #333;
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+#btn-random:not(:disabled):hover,
+#btn-save:not(:disabled):hover { background: #28283a; }
+
+#canvas-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: #060608;
+  overflow: hidden;
+}
+
+#fractal-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  display: none;
+  image-rendering: auto;
+}
+
+#placeholder { color: #333; font-size: 14px; text-align: center; pointer-events: none; }
+
+#progress-bar-wrap {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 3px;
+  background: #1a1a1a;
+}
+#progress-bar { height: 100%; background: #7060e0; width: 0%; transition: width .3s; }
+
+#status { position: absolute; bottom: 8px; right: 12px; font-size: 11px; color: #444; }
+
+#seed-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+#seed-row label { min-width: 96px; color: #888; font-size: 12px; flex-shrink: 0; }
+#seed-val { flex: 1; }
+#btn-dice {
+  flex: none;
+  background: #1c1c28;
+  border: 1px solid #333;
+  color: #888;
+  padding: 3px 7px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+#btn-dice:hover { color: #ccc; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>Fractal Designer <span id="gpu-badge">WebGPU</span></h1>
+  <div id="controls">
+
+    <div class="section-label">Seed &amp; Structure</div>
+    <div id="seed-row">
+      <label>Seed</label>
+      <input type="number" id="seed-val" value="42">
+      <button id="btn-dice" title="Random seed">&#9861;</button>
+    </div>
+    <div class="row">
+      <label>Transforms</label>
+      <input type="range" id="num_transforms" min="2" max="10" step="1" value="4">
+      <span class="val" id="num_transforms-val">4</span>
+    </div>
+    <div class="row">
+      <label>Symmetry</label>
+      <input type="range" id="symmetry" min="1" max="12" step="1" value="6">
+      <span class="val" id="symmetry-val">6</span>
+    </div>
+
+    <div class="section-label">Variations</div>
+    <div id="var-grid"></div>
+
+    <div class="section-label">Color</div>
+    <div class="row">
+      <label>Palette</label>
+      <select id="palette"></select>
+    </div>
+    <div class="row">
+      <label>Gamma</label>
+      <input type="range" id="gamma" min="0.05" max="8" step="0.05" value="2.5">
+      <span class="val" id="gamma-val">2.50</span>
+    </div>
+    <div class="row">
+      <label>Brightness</label>
+      <input type="range" id="brightness" min="0.1" max="20" step="0.1" value="3.0">
+      <span class="val" id="brightness-val">3.0</span>
+    </div>
+    <div class="row">
+      <label>Vibrancy</label>
+      <input type="range" id="vibrancy" min="0" max="1" step="0.01" value="1.0">
+      <span class="val" id="vibrancy-val">1.00</span>
+    </div>
+
+    <div class="section-label">Camera</div>
+    <div class="row">
+      <label>Zoom</label>
+      <input type="range" id="zoom" min="0.1" max="10" step="0.05" value="1.0">
+      <span class="val" id="zoom-val">1.00</span>
+    </div>
+    <div class="row">
+      <label>Rotation</label>
+      <input type="range" id="rotation" min="-360" max="360" step="1" value="0">
+      <span class="val" id="rotation-val">0°</span>
+    </div>
+
+    <div class="section-label">Output</div>
+    <div class="row">
+      <label>Width</label>
+      <input type="number" id="width" value="512" min="64" max="4096" step="64">
+    </div>
+    <div class="row">
+      <label>Height</label>
+      <input type="number" id="height" value="512" min="64" max="4096" step="64">
+    </div>
+    <div class="row">
+      <label>Quality</label>
+      <input type="range" id="quality" min="1" max="200" step="1" value="20">
+      <span class="val" id="quality-val">20</span>
+    </div>
+    <div class="row">
+      <label>Supersample</label>
+      <input type="range" id="supersample" min="1" max="4" step="1" value="1">
+      <span class="val" id="supersample-val">1×</span>
+    </div>
+
+  </div>
+
+  <div id="btn-row">
+    <button id="btn-random" title="Randomize">&#x2684;</button>
+    <button id="btn-render">Render</button>
+    <button id="btn-save" title="Save PNG" disabled>Save</button>
+  </div>
+</div>
+
+<div id="canvas-area">
+  <canvas id="fractal-canvas"></canvas>
+  <div id="placeholder">Hit Render to generate a fractal</div>
+  <div id="progress-bar-wrap"><div id="progress-bar"></div></div>
+  <div id="status"></div>
+</div>
+
+<script>
+// ── Palette data ──────────────────────────────────────────────────────────────
+const PALETTES = {
+  fire:      [[0,0,0],[80,0,0],[200,60,0],[255,160,0],[255,230,100],[255,255,255]],
+  ice:       [[0,0,0],[0,30,60],[0,80,120],[0,180,200],[100,230,240],[255,255,255]],
+  neon:      [[0,0,0],[60,0,80],[180,0,180],[255,0,120],[255,80,200],[255,255,255]],
+  rainbow:   [[255,0,0],[255,165,0],[255,255,0],[0,200,0],[0,100,255],[150,0,255],[255,0,0]],
+  gold:      [[0,0,0],[60,30,0],[160,100,0],[255,200,0],[255,240,160],[255,255,255]],
+  violet:    [[0,0,0],[20,0,60],[80,0,160],[160,60,255],[220,160,255],[255,255,255]],
+  copper:    [[0,0,0],[50,20,0],[150,60,20],[220,120,60],[255,200,150],[255,255,255]],
+  cyber:     [[0,0,0],[0,50,20],[0,150,100],[0,255,180],[150,255,230],[255,255,255]],
+  rose_gold: [[0,0,0],[60,30,40],[180,100,110],[255,180,190],[255,220,210],[255,255,255]],
+  forest:    [[0,0,0],[5,30,10],[20,80,30],[60,180,80],[180,240,160],[255,255,255]],
+  obsidian:  [[0,0,0],[20,20,25],[50,50,65],[120,120,140],[200,200,215],[255,255,255]],
+  solar:     [[0,0,0],[80,0,0],[200,50,0],[255,180,0],[255,255,150],[255,255,255]],
+  synthwave: [[0,0,0],[40,0,100],[100,0,255],[255,0,255],[0,255,255],[255,255,255]],
+  midnight:  [[0,0,0],[5,10,30],[20,40,80],[80,120,180],[180,200,220],[255,255,255]],
+  toxic:     [[0,0,0],[0,40,40],[0,120,100],[100,255,150],[200,255,200],[255,255,255]],
+  crimson:   [[0,0,0],[50,0,0],[150,10,10],[255,50,50],[255,180,180],[255,255,255]],
+};
+
+const VARIATION_NAMES = ['linear','sinusoidal','spherical','swirl','horseshoe','polar','curl','pdj'];
+const VARIATION_IDS   = Object.fromEntries(VARIATION_NAMES.map((n, i) => [n, i]));
+
+// ── WGSL compute shader ───────────────────────────────────────────────────────
+const WGSL = `
+struct Params {
+  nt    : u32,
+  nv    : u32,
+  W     : u32,
+  H     : u32,
+  ipt   : u32,
+  burn  : u32,
+  sym   : u32,
+  seed  : u32,
+  scale : f32,
+  cosr  : f32,
+  sinr  : f32,
+  cx    : f32,
+  cy    : f32,
+  _p0   : u32,
+  _p1   : u32,
+  _p2   : u32,
+}
+
+@group(0) @binding(0) var<storage, read>       affine : array<f32>;
+@group(0) @binding(1) var<storage, read>       cumW   : array<f32>;
+@group(0) @binding(2) var<storage, read>       tCol   : array<f32>;
+@group(0) @binding(3) var<storage, read>       varW   : array<f32>;
+@group(0) @binding(4) var<storage, read>       varId  : array<u32>;
+@group(0) @binding(5) var<uniform>             p      : Params;
+@group(0) @binding(6) var<storage, read>       symCos : array<f32>;
+@group(0) @binding(7) var<storage, read>       symSin : array<f32>;
+@group(0) @binding(8) var<storage, read_write> counts : array<atomic<u32>>;
+@group(0) @binding(9) var<storage, read_write> colSum : array<atomic<u32>>;
+
+fn pcg(s: ptr<function, u32>) {
+  *s = *s * 1664525u + 1013904223u;
+}
+
+fn rf(s: ptr<function, u32>) -> f32 {
+  pcg(s);
+  return f32(*s) / 4294967296.0;
+}
+
+fn casFAdd(idx: u32, val: f32) {
+  var old = atomicLoad(&colSum[idx]);
+  for (var i = 0u; i < 64u; i++) {
+    let nxt = bitcast<u32>(bitcast<f32>(old) + val);
+    let res = atomicCompareExchangeWeak(&colSum[idx], old, nxt);
+    if res.exchanged { return; }
+    old = res.old_value;
+  }
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let tid = gid.x;
+  var s = p.seed ^ (tid * 2654435761u + 1u);
+  for (var w = 0u; w < 8u; w++) { pcg(&s); }
+
+  var x  = rf(&s) * 2.0 - 1.0;
+  var y  = rf(&s) * 2.0 - 1.0;
+  var cc = 0.0f;
+
+  for (var it = 0u; it < p.burn + p.ipt; it++) {
+    let r  = rf(&s);
+    var ti = p.nt - 1u;
+    for (var j = 0u; j < p.nt; j++) {
+      if r <= cumW[j] { ti = j; break; }
+    }
+
+    let ai = ti * 6u;
+    let nx = affine[ai]*x + affine[ai+1u]*y + affine[ai+2u];
+    let ny = affine[ai+3u]*x + affine[ai+4u]*y + affine[ai+5u];
+
+    var ox = 0.0f;
+    var oy = 0.0f;
+    for (var v = 0u; v < p.nv; v++) {
+      let vid = varId[v];
+      var vx  = 0.0f;
+      var vy  = 0.0f;
+      let r2  = nx*nx + ny*ny;
+      switch vid {
+        case 0u: { vx = nx;  vy = ny; }
+        case 1u: { vx = sin(nx);  vy = sin(ny); }
+        case 2u: {
+          if r2 > 1e-10f {
+            let inv = 1.0f / r2;
+            vx = nx*inv;  vy = ny*inv;
+          }
+        }
+        case 3u: {
+          vx = nx*sin(r2) - ny*cos(r2);
+          vy = nx*cos(r2) + ny*sin(r2);
+        }
+        case 4u: {
+          let rr = sqrt(r2);
+          if rr > 1e-10f {
+            vx = (nx-ny)*(nx+ny)/rr;
+            vy = 2.0f*nx*ny/rr;
+          }
+        }
+        case 5u: {
+          vx = atan2(nx, ny) * 0.31830988618f;
+          vy = sqrt(r2) - 1.0f;
+        }
+        case 6u: {
+          let t1  = 1.0f + 0.5f*nx + 0.1f*(nx*nx - ny*ny);
+          let t2  = 0.5f*ny + 0.2f*nx*ny;
+          let rr2 = t1*t1 + t2*t2;
+          if rr2 > 1e-10f {
+            vx = (nx*t1 + ny*t2)/rr2;
+            vy = (ny*t1 - nx*t2)/rr2;
+          }
+        }
+        case 7u: {
+          vx = sin(1.5f*ny) - cos(1.8f*nx);
+          vy = sin(1.2f*nx) - cos(2.0f*ny);
+        }
+        default: { vx = nx;  vy = ny; }
+      }
+      ox += varW[ti*p.nv + v] * vx;
+      oy += varW[ti*p.nv + v] * vy;
+    }
+
+    x  = ox;  y  = oy;
+    cc = (cc + tCol[ti]) * 0.5f;
+
+    if abs(x) > 1e6f || abs(y) > 1e6f {
+      x  = rf(&s) * 2.0f - 1.0f;
+      y  = rf(&s) * 2.0f - 1.0f;
+      cc = 0.0f;
+      continue;
+    }
+
+    if it < p.burn { continue; }
+
+    for (var si = 0u; si < p.sym; si++) {
+      let rx = x*symCos[si] - y*symSin[si];
+      let ry = x*symSin[si] + y*symCos[si];
+      let wx = (rx - p.cx)*p.cosr - (ry - p.cy)*p.sinr;
+      let wy = (rx - p.cx)*p.sinr + (ry - p.cy)*p.cosr;
+      let px = i32(wx*p.scale + f32(p.W)*0.5f);
+      let py = i32(wy*p.scale + f32(p.H)*0.5f);
+      if px >= 0 && px < i32(p.W) && py >= 0 && py < i32(p.H) {
+        let idx = u32(py)*p.W + u32(px);
+        atomicAdd(&counts[idx], 1u);
+        casFAdd(idx, cc);
+      }
+    }
+  }
+}
+`;
+
+// ── RNG + transform builder ───────────────────────────────────────────────────
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function buildTransforms(seed, n, varNames) {
+  const rng = mulberry32(seed >>> 0);
+  const uni = (lo, hi) => lo + rng() * (hi - lo);
+  const rawW = Array.from({length: n}, () => uni(0.3, 1.0));
+  const totalW = rawW.reduce((a, b) => a + b, 0);
+  return rawW.map((rw, i) => {
+    const a = uni(-1,1), b = uni(-.5,.5), c = uni(-.5,.5);
+    const d = uni(-.5,.5), e = uni(-1,1), f = uni(-.5,.5);
+    const color = n > 1 ? i / (n - 1) : 0;
+    const varWeights = Object.fromEntries(varNames.map(v => [v, uni(0.1, 1.0)]));
+    return { a, b, c, d, e, f, weight: rw / totalW, color, varWeights };
+  });
+}
+
+function prepareGPUData(transforms, varNames) {
+  const nt = transforms.length, nv = varNames.length;
+  const affine   = new Float32Array(nt * 6);
+  const cumW     = new Float32Array(nt);
+  const tCol     = new Float32Array(nt);
+  const varWFlat = new Float32Array(nt * nv);
+  const varIds   = new Uint32Array(nv);
+
+  let cum = 0;
+  for (let i = 0; i < nt; i++) {
+    const t = transforms[i];
+    affine.set([t.a, t.b, t.c, t.d, t.e, t.f], i * 6);
+    cum += t.weight; cumW[i] = cum;
+    tCol[i] = t.color;
+    const tot = varNames.reduce((s, v) => s + (t.varWeights[v] || 0), 0) || 1;
+    for (let j = 0; j < nv; j++)
+      varWFlat[i * nv + j] = (t.varWeights[varNames[j]] || 0) / tot;
+  }
+  for (let j = 0; j < nv; j++) varIds[j] = VARIATION_IDS[varNames[j]] ?? 0;
+  return { affine, cumW, tCol, varWFlat, varIds };
+}
+
+// ── Palette helpers ───────────────────────────────────────────────────────────
+function samplePalette(stops, t) {
+  t = Math.max(0, Math.min(1, t));
+  const n = stops.length - 1;
+  const s = t * n;
+  const lo = Math.floor(s), hi = Math.min(lo + 1, n);
+  const f = s - lo;
+  const [r0,g0,b0] = stops[lo], [r1,g1,b1] = stops[hi];
+  return [r0+(r1-r0)*f, g0+(g1-g0)*f, b0+(b1-b0)*f];
+}
+
+// ── Tone-map + colorize (CPU) ─────────────────────────────────────────────────
+function toneMapAndColorize(countsU32, colorF32, config, W, H) {
+  const { gamma, brightness, vibrancy = 1, palette = 'fire', background = [0,0,0] } = config;
+  const n = W * H;
+  const out = new Uint8ClampedArray(n * 4);
+  const stops = PALETTES[palette] || PALETTES.fire;
+  const safeVib = Math.max(vibrancy, 0.01);
+  const [bgR, bgG, bgB] = background;
+
+  let mx = 0;
+  for (let i = 0; i < n; i++) if (countsU32[i] > mx) mx = countsU32[i];
+
+  if (mx === 0) {
+    for (let i = 0; i < n; i++) {
+      out[i*4]=bgR; out[i*4+1]=bgG; out[i*4+2]=bgB; out[i*4+3]=255;
+    }
+    return new ImageData(out, W, H);
+  }
+
+  const logMx = Math.log1p(mx);
+  for (let i = 0; i < n; i++) {
+    const cnt = countsU32[i];
+    if (cnt === 0) {
+      out[i*4]=bgR; out[i*4+1]=bgG; out[i*4+2]=bgB; out[i*4+3]=255;
+      continue;
+    }
+    const lum  = Math.min(1, Math.pow(Math.log1p(cnt) / logMx, 1 / gamma) * brightness);
+    const cavg = Math.max(0, Math.min(1, colorF32[i] / cnt));
+    const [r, g, b] = samplePalette(stops, cavg);
+    const vp = Math.pow(lum, 1 / safeVib);
+    out[i*4]   = r * lum * (1 - vibrancy) + r * vp * vibrancy;
+    out[i*4+1] = g * lum * (1 - vibrancy) + g * vp * vibrancy;
+    out[i*4+2] = b * lum * (1 - vibrancy) + b * vp * vibrancy;
+    out[i*4+3] = 255;
+  }
+  return new ImageData(out, W, H);
+}
+
+// ── WebGPU init ───────────────────────────────────────────────────────────────
+let gpuDevice   = null;
+let gpuPipeline = null;
+
+async function initGPU() {
+  if (!navigator.gpu) throw new Error('WebGPU not supported in this browser');
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) throw new Error('No WebGPU adapter found');
+  gpuDevice = await adapter.requestDevice();
+  gpuDevice.lost.then(() => { gpuDevice = null; gpuPipeline = null; });
+  const mod = gpuDevice.createShaderModule({ code: WGSL });
+  gpuPipeline = gpuDevice.createComputePipeline({
+    layout: 'auto',
+    compute: { module: mod, entryPoint: 'main' },
+  });
+}
+
+// ── Render loop ───────────────────────────────────────────────────────────────
+const FRACS      = [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.37];
+const MAX_THREADS = 1 << 17;  // 131072
+const BURN        = 20;
+const MIN_IPT     = 64;
+
+async function renderFractal(config, onFrame, cancelRef) {
+  if (!gpuDevice || !gpuPipeline) throw new Error('GPU not ready');
+
+  const ss    = config.supersample || 1;
+  const W     = config.width  * ss;
+  const H     = config.height * ss;
+  const bufSz = W * H * 4;   // bytes (u32 per pixel)
+
+  const varNames   = config.variations;
+  const transforms = buildTransforms(config.seed, config.num_transforms, varNames);
+  const { affine, cumW, tCol, varWFlat, varIds } = prepareGPUData(transforms, varNames);
+
+  const sa = 2 * Math.PI / config.symmetry;
+  const symCos = new Float32Array(config.symmetry);
+  const symSin = new Float32Array(config.symmetry);
+  for (let s = 0; s < config.symmetry; s++) {
+    symCos[s] = Math.cos(s * sa);
+    symSin[s] = Math.sin(s * sa);
+  }
+
+  const dev = gpuDevice;
+  const mkStorage = data => {
+    const sz  = Math.max(data.byteLength, 4);
+    const buf = dev.createBuffer({ size: sz, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    if (data.byteLength > 0) dev.queue.writeBuffer(buf, 0, data);
+    return buf;
+  };
+
+  const affineBuf = mkStorage(affine);
+  const cumWBuf   = mkStorage(cumW);
+  const tColBuf   = mkStorage(tCol);
+  const varWBuf   = mkStorage(varWFlat);
+  const varIdBuf  = mkStorage(varIds);
+  const symCosBuf = mkStorage(symCos);
+  const symSinBuf = mkStorage(symSin);
+  const paramsBuf = dev.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+
+  // Accumulation buffers — WebGPU zero-initialises on creation
+  const countsBuf = dev.createBuffer({
+    size: bufSz, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+  const colorBuf  = dev.createBuffer({
+    size: bufSz, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+
+  const stageCntBuf = dev.createBuffer({ size: bufSz, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  const stageColBuf = dev.createBuffer({ size: bufSz, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+
+  const bindGroup = dev.createBindGroup({
+    layout: gpuPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: affineBuf } },
+      { binding: 1, resource: { buffer: cumWBuf   } },
+      { binding: 2, resource: { buffer: tColBuf   } },
+      { binding: 3, resource: { buffer: varWBuf   } },
+      { binding: 4, resource: { buffer: varIdBuf  } },
+      { binding: 5, resource: { buffer: paramsBuf } },
+      { binding: 6, resource: { buffer: symCosBuf } },
+      { binding: 7, resource: { buffer: symSinBuf } },
+      { binding: 8, resource: { buffer: countsBuf } },
+      { binding: 9, resource: { buffer: colorBuf  } },
+    ],
+  });
+
+  const total = config.quality * W * H;
+  let done = 0;
+
+  try {
+    for (let pass = 0; pass < FRACS.length; pass++) {
+      if (cancelRef.cancelled) break;
+
+      const chunk = pass === FRACS.length - 1
+        ? Math.max(1, total - done)
+        : Math.max(1, Math.floor(total * FRACS[pass]));
+
+      let nThr = Math.min(MAX_THREADS, Math.max(64, Math.floor(chunk / MIN_IPT)));
+      nThr = Math.ceil(nThr / 64) * 64;
+      const ipt   = Math.max(1, Math.floor(chunk / nThr));
+      const numWG = Math.ceil(nThr / 64);
+
+      const scale  = Math.min(W, H) * 0.35 * config.zoom;
+      const rotRad = (config.rotation || 0) * Math.PI / 180;
+      const cx     = (config.center || [0, 0])[0];
+      const cy     = (config.center || [0, 0])[1];
+      const seed   = ((config.seed >>> 0) + pass * 1000003) >>> 0;
+
+      // Build 64-byte params struct (shared u32/f32 view of same ArrayBuffer)
+      const pd = new ArrayBuffer(64);
+      const pu = new Uint32Array(pd);
+      const pf = new Float32Array(pd);
+      pu[0]=transforms.length; pu[1]=varNames.length; pu[2]=W;            pu[3]=H;
+      pu[4]=ipt;               pu[5]=BURN;             pu[6]=config.symmetry; pu[7]=seed;
+      pf[8]=scale; pf[9]=Math.cos(rotRad); pf[10]=Math.sin(rotRad); pf[11]=cx; pf[12]=cy;
+      dev.queue.writeBuffer(paramsBuf, 0, pd);
+
+      const enc = dev.createCommandEncoder();
+      const cp  = enc.beginComputePass();
+      cp.setPipeline(gpuPipeline);
+      cp.setBindGroup(0, bindGroup);
+      cp.dispatchWorkgroups(numWG);
+      cp.end();
+      enc.copyBufferToBuffer(countsBuf, 0, stageCntBuf, 0, bufSz);
+      enc.copyBufferToBuffer(colorBuf,  0, stageColBuf, 0, bufSz);
+      dev.queue.submit([enc.finish()]);
+
+      await stageCntBuf.mapAsync(GPUMapMode.READ);
+      await stageColBuf.mapAsync(GPUMapMode.READ);
+      const cntData = stageCntBuf.getMappedRange().slice(0);
+      const colData = stageColBuf.getMappedRange().slice(0);
+      stageCntBuf.unmap();
+      stageColBuf.unmap();
+
+      done += chunk;
+      const imageData = toneMapAndColorize(
+        new Uint32Array(cntData), new Float32Array(colData), config, W, H);
+      await onFrame(imageData, Math.min(done / total, 1));
+    }
+  } finally {
+    for (const b of [affineBuf, cumWBuf, tColBuf, varWBuf, varIdBuf, symCosBuf, symSinBuf,
+                     paramsBuf, countsBuf, colorBuf, stageCntBuf, stageColBuf]) b.destroy();
+  }
+}
+
+// ── Canvas + UI ───────────────────────────────────────────────────────────────
+const canvas      = document.getElementById('fractal-canvas');
+const ctx2d       = canvas.getContext('2d');
+const placeholder = document.getElementById('placeholder');
+const bar         = document.getElementById('progress-bar');
+const statusEl    = document.getElementById('status');
+const btnRender   = document.getElementById('btn-render');
+const btnSave     = document.getElementById('btn-save');
+
+let rendering  = false;
+let cancelRef  = { cancelled: false };
+let lastW = 0, lastH = 0;
+
+function getConfig() {
+  const variations = [...document.querySelectorAll('#var-grid input:checked')].map(c => c.value);
+  if (!variations.length) { alert('Select at least one variation.'); return null; }
+  return {
+    seed:           parseInt(document.getElementById('seed-val').value) || 42,
+    num_transforms: parseInt(document.getElementById('num_transforms').value),
+    symmetry:       parseInt(document.getElementById('symmetry').value),
+    variations,
+    palette:        document.getElementById('palette').value,
+    gamma:          parseFloat(document.getElementById('gamma').value),
+    brightness:     parseFloat(document.getElementById('brightness').value),
+    vibrancy:       parseFloat(document.getElementById('vibrancy').value),
+    zoom:           parseFloat(document.getElementById('zoom').value),
+    rotation:       parseFloat(document.getElementById('rotation').value),
+    center:         [0, 0],
+    background:     [0, 0, 0],
+    width:          parseInt(document.getElementById('width').value) || 512,
+    height:         parseInt(document.getElementById('height').value) || 512,
+    quality:        parseInt(document.getElementById('quality').value),
+    supersample:    parseInt(document.getElementById('supersample').value),
+  };
+}
+
+async function onFrame(imageData, progress) {
+  lastW = imageData.width;
+  lastH = imageData.height;
+  canvas.width  = imageData.width;
+  canvas.height = imageData.height;
+  ctx2d.putImageData(imageData, 0, 0);
+  canvas.style.display = 'block';
+  placeholder.style.display = 'none';
+  bar.style.width = (progress * 100).toFixed(1) + '%';
+  statusEl.textContent = Math.round(progress * 100) + '%';
+}
+
+btnRender.addEventListener('click', async () => {
+  if (rendering) { cancelRef.cancelled = true; return; }
+
+  const config = getConfig();
+  if (!config) return;
+  if (!gpuDevice) { statusEl.textContent = 'WebGPU not available'; return; }
+
+  rendering = true;
+  cancelRef = { cancelled: false };
+  btnRender.textContent = 'Cancel';
+  btnRender.classList.add('cancelling');
+  btnSave.disabled = true;
+  bar.style.width = '0%';
+  statusEl.textContent = '';
+
+  const t0 = Date.now();
+  try {
+    await renderFractal(config, onFrame, cancelRef);
+    if (!cancelRef.cancelled) {
+      bar.style.width = '100%';
+      statusEl.textContent = `Done in ${((Date.now() - t0) / 1000).toFixed(1)}s`;
+    } else {
+      statusEl.textContent = 'Cancelled';
+    }
+    if (lastW > 0) btnSave.disabled = false;
+  } catch (e) {
+    console.error(e);
+    statusEl.textContent = 'Error: ' + e.message;
+  } finally {
+    rendering = false;
+    btnRender.textContent = 'Render';
+    btnRender.classList.remove('cancelling');
+  }
+});
+
+btnSave.addEventListener('click', () => {
+  canvas.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'fractal.png';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }, 'image/png');
+});
+
+// ── Slider live values ────────────────────────────────────────────────────────
+const SLIDERS = {
+  num_transforms: v => v,
+  symmetry:       v => v,
+  gamma:          v => parseFloat(v).toFixed(2),
+  brightness:     v => parseFloat(v).toFixed(1),
+  vibrancy:       v => parseFloat(v).toFixed(2),
+  zoom:           v => parseFloat(v).toFixed(2),
+  rotation:       v => v + '°',
+  quality:        v => v,
+  supersample:    v => v + '×',
+};
+for (const [id, fmt] of Object.entries(SLIDERS)) {
+  const el = document.getElementById(id);
+  document.getElementById(id + '-val').textContent = fmt(el.value);
+  el.addEventListener('input', () => document.getElementById(id + '-val').textContent = fmt(el.value));
+}
+
+document.getElementById('btn-dice').addEventListener('click', () => {
+  document.getElementById('seed-val').value = Math.floor(Math.random() * 1e9);
+});
+
+function setSlider(id, val) {
+  const el = document.getElementById(id);
+  el.value = val;
+  const disp = document.getElementById(id + '-val');
+  if (disp && SLIDERS[id]) disp.textContent = SLIDERS[id](String(val));
+}
+
+document.getElementById('btn-random').addEventListener('click', () => {
+  document.getElementById('seed-val').value = Math.floor(Math.random() * 1e9);
+  setSlider('num_transforms', Math.floor(Math.random() * 5) + 2);
+  setSlider('symmetry',       Math.floor(Math.random() * 9) + 1);
+  setSlider('zoom',           +(Math.random() * 2.5 + 0.4).toFixed(2));
+  setSlider('rotation',       Math.floor(Math.random() * 720) - 360);
+  setSlider('gamma',          +(Math.random() * 3 + 0.5).toFixed(2));
+  setSlider('brightness',     +(Math.random() * 5 + 1).toFixed(1));
+  setSlider('vibrancy',       +Math.random().toFixed(2));
+  const cbs = document.querySelectorAll('#var-grid input');
+  cbs.forEach(cb => cb.checked = false);
+  const n = Math.floor(Math.random() * 3) + 1;
+  [...cbs].sort(() => Math.random() - .5).slice(0, n).forEach(cb => cb.checked = true);
+  const palSel = document.getElementById('palette');
+  palSel.selectedIndex = Math.floor(Math.random() * palSel.options.length);
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(async () => {
+  const palSel = document.getElementById('palette');
+  for (const name of Object.keys(PALETTES)) {
+    const opt = document.createElement('option');
+    opt.value = opt.textContent = name;
+    if (name === 'fire') opt.selected = true;
+    palSel.appendChild(opt);
+  }
+
+  const grid = document.getElementById('var-grid');
+  const defaultVars = new Set(['swirl', 'sinusoidal']);
+  for (const v of VARIATION_NAMES) {
+    const lbl = document.createElement('label');
+    const cb  = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = v; cb.checked = defaultVars.has(v);
+    lbl.appendChild(cb); lbl.append(' ' + v);
+    grid.appendChild(lbl);
+  }
+
+  const badge = document.getElementById('gpu-badge');
+  try {
+    await initGPU();
+  } catch (e) {
+    badge.textContent = 'N/A';
+    badge.classList.add('unavailable');
+    statusEl.textContent = 'WebGPU unavailable: ' + e.message;
+    btnRender.disabled = true;
+  }
+})();
+</script>
+</body>
+</html>
