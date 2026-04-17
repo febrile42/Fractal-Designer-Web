@@ -1,6 +1,0 @@
-numpy>=2.0
-pillow>=10.0
-dearpygui>=2.0
-pytest>=7.0
-cupy-cuda12x>=13.0
-metalcompute>=0.2.9; sys_platform == "darwin"
