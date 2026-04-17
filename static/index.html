@@ -338,10 +338,9 @@ struct Params {
 @group(0) @binding(3) var<storage, read>       varW   : array<f32>;
 @group(0) @binding(4) var<storage, read>       varId  : array<u32>;
 @group(0) @binding(5) var<uniform>             p      : Params;
-@group(0) @binding(6) var<storage, read>       symCos : array<f32>;
-@group(0) @binding(7) var<storage, read>       symSin : array<f32>;
-@group(0) @binding(8) var<storage, read_write> counts : array<atomic<u32>>;
-@group(0) @binding(9) var<storage, read_write> colSum : array<atomic<u32>>;
+@group(0) @binding(6) var<storage, read>       symVec : array<f32>;
+@group(0) @binding(7) var<storage, read_write> counts : array<atomic<u32>>;
+@group(0) @binding(8) var<storage, read_write> colSum : array<atomic<u32>>;
 
 fn pcg(s: ptr<function, u32>) {
   *s = *s * 1664525u + 1013904223u;
@@ -352,14 +351,8 @@ fn rf(s: ptr<function, u32>) -> f32 {
   return f32(*s) / 4294967296.0;
 }
 
-fn casFAdd(idx: u32, val: f32) {
-  var old = atomicLoad(&colSum[idx]);
-  for (var i = 0u; i < 64u; i++) {
-    let nxt = bitcast<u32>(bitcast<f32>(old) + val);
-    let res = atomicCompareExchangeWeak(&colSum[idx], old, nxt);
-    if res.exchanged { return; }
-    old = res.old_value;
-  }
+fn addColor(idx: u32, val: f32) {
+  atomicAdd(&colSum[idx], u32(val * 64.0f));
 }
 
 @compute @workgroup_size(64)
@@ -446,8 +439,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if it < p.burn { continue; }
 
     for (var si = 0u; si < p.sym; si++) {
-      let rx = x*symCos[si] - y*symSin[si];
-      let ry = x*symSin[si] + y*symCos[si];
+      let rx = x*symVec[2u*si] - y*symVec[2u*si+1u];
+      let ry = x*symVec[2u*si+1u] + y*symVec[2u*si];
       let wx = (rx - p.cx)*p.cosr - (ry - p.cy)*p.sinr;
       let wy = (rx - p.cx)*p.sinr + (ry - p.cy)*p.cosr;
       let px = i32(wx*p.scale + f32(p.W)*0.5f);
@@ -455,7 +448,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       if px >= 0 && px < i32(p.W) && py >= 0 && py < i32(p.H) {
         let idx = u32(py)*p.W + u32(px);
         atomicAdd(&counts[idx], 1u);
-        casFAdd(idx, cc);
+        addColor(idx, cc);
       }
     }
   }
@@ -520,7 +513,7 @@ function samplePalette(stops, t) {
 }
 
 // ── Tone-map + colorize (CPU) ─────────────────────────────────────────────────
-function toneMapAndColorize(countsU32, colorF32, config, W, H) {
+function toneMapAndColorize(countsU32, colorU32, config, W, H) {
   const { gamma, brightness, vibrancy = 1, palette = 'fire', background = [0,0,0] } = config;
   const n = W * H;
   const out = new Uint8ClampedArray(n * 4);
@@ -546,7 +539,7 @@ function toneMapAndColorize(countsU32, colorF32, config, W, H) {
       continue;
     }
     const lum  = Math.min(1, Math.pow(Math.log1p(cnt) / logMx, 1 / gamma) * brightness);
-    const cavg = Math.max(0, Math.min(1, colorF32[i] / cnt));
+    const cavg = Math.max(0, Math.min(1, colorU32[i] / cnt / 64.0));
     const [r, g, b] = samplePalette(stops, cavg);
     const vp = Math.pow(lum, 1 / safeVib);
     out[i*4]   = r * lum * (1 - vibrancy) + r * vp * vibrancy;
@@ -593,11 +586,10 @@ async function renderFractal(config, onFrame, cancelRef) {
   const { affine, cumW, tCol, varWFlat, varIds } = prepareGPUData(transforms, varNames);
 
   const sa = 2 * Math.PI / config.symmetry;
-  const symCos = new Float32Array(config.symmetry);
-  const symSin = new Float32Array(config.symmetry);
+  const symVec = new Float32Array(config.symmetry * 2);
   for (let s = 0; s < config.symmetry; s++) {
-    symCos[s] = Math.cos(s * sa);
-    symSin[s] = Math.sin(s * sa);
+    symVec[2*s]   = Math.cos(s * sa);
+    symVec[2*s+1] = Math.sin(s * sa);
   }
 
   const dev = gpuDevice;
@@ -613,8 +605,7 @@ async function renderFractal(config, onFrame, cancelRef) {
   const tColBuf   = mkStorage(tCol);
   const varWBuf   = mkStorage(varWFlat);
   const varIdBuf  = mkStorage(varIds);
-  const symCosBuf = mkStorage(symCos);
-  const symSinBuf = mkStorage(symSin);
+  const symVecBuf = mkStorage(symVec);
   const paramsBuf = dev.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
   // Accumulation buffers — WebGPU zero-initialises on creation
@@ -635,10 +626,9 @@ async function renderFractal(config, onFrame, cancelRef) {
       { binding: 3, resource: { buffer: varWBuf   } },
       { binding: 4, resource: { buffer: varIdBuf  } },
       { binding: 5, resource: { buffer: paramsBuf } },
-      { binding: 6, resource: { buffer: symCosBuf } },
-      { binding: 7, resource: { buffer: symSinBuf } },
-      { binding: 8, resource: { buffer: countsBuf } },
-      { binding: 9, resource: { buffer: colorBuf  } },
+      { binding: 6, resource: { buffer: symVecBuf } },
+      { binding: 7, resource: { buffer: countsBuf } },
+      { binding: 8, resource: { buffer: colorBuf  } },
     ],
   });
 
@@ -692,11 +682,11 @@ async function renderFractal(config, onFrame, cancelRef) {
 
       done += chunk;
       const imageData = toneMapAndColorize(
-        new Uint32Array(cntData), new Float32Array(colData), config, W, H);
+        new Uint32Array(cntData), new Uint32Array(colData), config, W, H);
       await onFrame(imageData, Math.min(done / total, 1));
     }
   } finally {
-    for (const b of [affineBuf, cumWBuf, tColBuf, varWBuf, varIdBuf, symCosBuf, symSinBuf,
+    for (const b of [affineBuf, cumWBuf, tColBuf, varWBuf, varIdBuf, symVecBuf,
                      paramsBuf, countsBuf, colorBuf, stageCntBuf, stageColBuf]) b.destroy();
   }
 }
