@@ -190,6 +190,23 @@ button:disabled { opacity: .4; cursor: default; }
   border-radius: 4px;
 }
 #btn-dice:hover { color: #ccc; }
+
+#share-row {
+  padding: 0 14px 8px;
+}
+#btn-copy-url {
+  width: 100%;
+  background: transparent;
+  color: #4a4a60;
+  border: 1px solid #1e1e2e;
+  font-size: 11px;
+  padding: 5px 10px;
+  letter-spacing: .05em;
+  transition: color .15s, border-color .15s, background .15s;
+}
+#btn-copy-url:hover { color: #8888aa; border-color: #333348; }
+#btn-copy-url.copied { color: #5aaa88; border-color: #1a3a2a; background: #0a1812; }
+#btn-copy-url.error  { color: #f66;    border-color: #3a1a1a; }
 </style>
 </head>
 <body>
@@ -273,6 +290,9 @@ button:disabled { opacity: .4; cursor: default; }
 
   </div>
 
+  <div id="share-row">
+    <button id="btn-copy-url">Copy Link</button>
+  </div>
   <div id="btn-row">
     <button id="btn-random" title="Randomize">&#x2684;</button>
     <button id="btn-render">Render</button>
@@ -310,6 +330,7 @@ const PALETTES = {
 
 const VARIATION_NAMES = ['linear','sinusoidal','spherical','swirl','horseshoe','polar','curl','pdj'];
 const VARIATION_IDS   = Object.fromEntries(VARIATION_NAMES.map((n, i) => [n, i]));
+const PALETTE_NAMES   = Object.keys(PALETTES);
 
 // ── WGSL compute shader ───────────────────────────────────────────────────────
 const WGSL = `
@@ -704,6 +725,82 @@ let rendering  = false;
 let cancelRef  = { cancelled: false };
 let lastW = 0, lastH = 0;
 
+// ── URL hash encode/decode ─────────────────────────────────────────────────────
+// 24-byte packed binary → base64url (~32 chars), version-tagged for future compat
+
+function encodeConfig(cfg) {
+  const buf = new ArrayBuffer(24);
+  const v = new DataView(buf);
+  let o = 0;
+  v.setUint8(o++, 1);                                                         // version
+  v.setUint32(o, cfg.seed >>> 0, true);                            o += 4;
+  v.setUint8(o++, cfg.num_transforms);
+  v.setUint8(o++, cfg.symmetry);
+  let varMask = 0;
+  VARIATION_NAMES.forEach((n, i) => { if (cfg.variations.includes(n)) varMask |= 1 << i; });
+  v.setUint8(o++, varMask);
+  v.setUint8(o++, Math.max(0, PALETTE_NAMES.indexOf(cfg.palette)));
+  v.setUint16(o, Math.round(cfg.gamma      * 100), true);          o += 2;
+  v.setUint16(o, Math.round(cfg.brightness * 100), true);          o += 2;
+  v.setUint8(o++, Math.round(cfg.vibrancy  * 255));
+  v.setUint16(o, Math.round(cfg.zoom       * 100), true);          o += 2;
+  v.setInt16(o,  Math.round(cfg.rotation),          true);          o += 2;
+  v.setUint16(o, cfg.width,                         true);          o += 2;
+  v.setUint16(o, cfg.height,                        true);          o += 2;
+  v.setUint8(o++, cfg.quality);
+  v.setUint8(o++, cfg.supersample);
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function decodeConfig(s) {
+  try {
+    const bytes = Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+    if (bytes.length < 24) return null;
+    const v = new DataView(bytes.buffer);
+    let o = 0;
+    if (v.getUint8(o++) !== 1) return { versionMismatch: true };
+    const cfg = {};
+    cfg.seed           = v.getUint32(o, true);                               o += 4;
+    cfg.num_transforms = v.getUint8(o++);
+    cfg.symmetry       = v.getUint8(o++);
+    const varMask      = v.getUint8(o++);
+    cfg.variations     = VARIATION_NAMES.filter((_, i) => varMask & (1 << i));
+    if (!cfg.variations.length) cfg.variations = ['swirl'];
+    cfg.palette        = PALETTE_NAMES[v.getUint8(o++)] ?? 'fire';
+    cfg.gamma          = v.getUint16(o, true) / 100;                         o += 2;
+    cfg.brightness     = v.getUint16(o, true) / 100;                         o += 2;
+    cfg.vibrancy       = +(v.getUint8(o++) / 255).toFixed(2);
+    cfg.zoom           = v.getUint16(o, true) / 100;                         o += 2;
+    cfg.rotation       = v.getInt16(o,  true);                               o += 2;
+    cfg.width          = v.getUint16(o, true);                               o += 2;
+    cfg.height         = v.getUint16(o, true);                               o += 2;
+    cfg.quality        = v.getUint8(o++);
+    cfg.supersample    = v.getUint8(o++);
+    return cfg;
+  } catch { return null; }
+}
+
+function applyConfig(cfg) {
+  if (!cfg) return;
+  document.getElementById('seed-val').value = cfg.seed;
+  setSlider('num_transforms', cfg.num_transforms);
+  setSlider('symmetry',       cfg.symmetry);
+  setSlider('gamma',          cfg.gamma);
+  setSlider('brightness',     cfg.brightness);
+  setSlider('vibrancy',       cfg.vibrancy);
+  setSlider('zoom',           cfg.zoom);
+  setSlider('rotation',       cfg.rotation);
+  setSlider('quality',        cfg.quality);
+  setSlider('supersample',    cfg.supersample);
+  document.getElementById('width').value  = cfg.width;
+  document.getElementById('height').value = cfg.height;
+  document.getElementById('palette').value = cfg.palette;
+  document.querySelectorAll('#var-grid input').forEach(cb => {
+    cb.checked = cfg.variations.includes(cb.value);
+  });
+}
+
 function getConfig() {
   const variations = [...document.querySelectorAll('#var-grid input:checked')].map(c => c.value);
   if (!variations.length) { alert('Select at least one variation.'); return null; }
@@ -784,6 +881,22 @@ btnSave.addEventListener('click', () => {
   }, 'image/png');
 });
 
+document.getElementById('btn-copy-url').addEventListener('click', () => {
+  const cfg = getConfig();
+  if (!cfg) return;
+  history.replaceState(null, '', '#' + encodeConfig(cfg));
+  const btn = document.getElementById('btn-copy-url');
+  navigator.clipboard.writeText(location.href).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy Link'; btn.classList.remove('copied'); }, 1800);
+  }).catch(() => {
+    btn.textContent = 'Copy failed — copy URL manually';
+    btn.classList.add('error');
+    setTimeout(() => { btn.textContent = 'Copy Link'; btn.classList.remove('error'); }, 2500);
+  });
+});
+
 // ── Slider live values ────────────────────────────────────────────────────────
 const SLIDERS = {
   num_transforms: v => v,
@@ -848,6 +961,16 @@ document.getElementById('btn-random').addEventListener('click', () => {
     cb.type = 'checkbox'; cb.value = v; cb.checked = defaultVars.has(v);
     lbl.appendChild(cb); lbl.append(' ' + v);
     grid.appendChild(lbl);
+  }
+
+  if (location.hash) {
+    const restored = decodeConfig(location.hash.slice(1));
+    if (restored && restored.versionMismatch) {
+      placeholder.textContent = 'Link was created by a newer version — parameters not restored';
+    } else {
+      applyConfig(restored);
+      if (restored) placeholder.textContent = 'Hit Render to see this saved fractal';
+    }
   }
 
   const badge = document.getElementById('gpu-badge');
