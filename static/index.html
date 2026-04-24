@@ -884,8 +884,8 @@ document.getElementById('btn-copy-url').addEventListener('click', () => {
   const cfg = getConfig();
   if (!cfg) return;
   history.replaceState(null, '', '#' + encodeConfig(cfg));
-  navigator.clipboard.writeText(location.href).then(() => {
-    const btn = document.getElementById('btn-copy-url');
+  const btn = document.getElementById('btn-copy-url');
+  navigator.clipboard.writeText(location.href).catch(() => {}).finally(() => {
     btn.textContent = 'Copied!';
     btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'Copy Link'; btn.classList.remove('copied'); }, 1800);
