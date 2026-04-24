@@ -13,6 +13,7 @@ All computation runs client-side via [WebGPU](https://developer.mozilla.org/en-U
 - Supersampling up to 4×
 - Progressive preview — image builds up across 7 passes
 - Save output as PNG
+- Copy Link — encodes current settings into a compact base64url hash appended to the URL; paste anywhere to share an exact fractal configuration. Visiting a shared link pre-populates all controls and prompts you to hit Render.
 
 ## Requirements
 

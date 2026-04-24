@@ -206,6 +206,7 @@ button:disabled { opacity: .4; cursor: default; }
 }
 #btn-copy-url:hover { color: #8888aa; border-color: #333348; }
 #btn-copy-url.copied { color: #5aaa88; border-color: #1a3a2a; background: #0a1812; }
+#btn-copy-url.error  { color: #f66;    border-color: #3a1a1a; }
 </style>
 </head>
 <body>
@@ -758,7 +759,7 @@ function decodeConfig(s) {
     if (bytes.length < 24) return null;
     const v = new DataView(bytes.buffer);
     let o = 0;
-    if (v.getUint8(o++) !== 1) return null;
+    if (v.getUint8(o++) !== 1) return { versionMismatch: true };
     const cfg = {};
     cfg.seed           = v.getUint32(o, true);                               o += 4;
     cfg.num_transforms = v.getUint8(o++);
@@ -885,10 +886,14 @@ document.getElementById('btn-copy-url').addEventListener('click', () => {
   if (!cfg) return;
   history.replaceState(null, '', '#' + encodeConfig(cfg));
   const btn = document.getElementById('btn-copy-url');
-  navigator.clipboard.writeText(location.href).catch(() => {}).finally(() => {
+  navigator.clipboard.writeText(location.href).then(() => {
     btn.textContent = 'Copied!';
     btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'Copy Link'; btn.classList.remove('copied'); }, 1800);
+  }).catch(() => {
+    btn.textContent = 'Copy failed — copy URL manually';
+    btn.classList.add('error');
+    setTimeout(() => { btn.textContent = 'Copy Link'; btn.classList.remove('error'); }, 2500);
   });
 });
 
@@ -960,8 +965,12 @@ document.getElementById('btn-random').addEventListener('click', () => {
 
   if (location.hash) {
     const restored = decodeConfig(location.hash.slice(1));
-    applyConfig(restored);
-    if (restored) placeholder.textContent = 'Hit Render to see this saved fractal';
+    if (restored && restored.versionMismatch) {
+      placeholder.textContent = 'Link was created by a newer version — parameters not restored';
+    } else {
+      applyConfig(restored);
+      if (restored) placeholder.textContent = 'Hit Render to see this saved fractal';
+    }
   }
 
   const badge = document.getElementById('gpu-badge');
